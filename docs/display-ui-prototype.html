@@ -36,7 +36,8 @@
   textarea { height: auto; padding: 6px 8px; resize: vertical; }
   input[type="color"] { width: 100%; padding: 3px; }
   button { background: #222; color: #fff; border-color: #222; cursor: pointer; }
-  button:hover { background: #3e3e3e; }
+  button:enabled:hover { background: #3e3e3e; }
+  button:disabled { opacity: .5; cursor: default; }
   :focus-visible { outline: 2px solid #397adc; outline-offset: 2px; }
   .colors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .settings hr { width: 100%; margin: 0; border: 0; border-top: 1px solid #d8d5ce; }
@@ -82,12 +83,44 @@
   .tile[data-type="progress"] .tile-bar { background: color-mix(in srgb, var(--ink) 28%, var(--surface)); }
   .tile-bar > i { display: block; width: var(--progress); height: 4px; background: var(--state); }
   .tile .label { position: absolute; inset: 12px 8px auto; font-size: 12px; line-height: 14px; }
-  .tile .reading { position: absolute; inset: 36px 8px auto; font-size: 20px; line-height: 20px; font-weight: 700; }
-  .tile .unit-compact { margin-inline-start: 2px; font-size: 10px; line-height: 10px; }
+  .tile .reading {
+    position: absolute; inset: 36px 8px auto; display: flex; align-items: baseline; gap: 2px;
+    width: calc(100% - 16px); white-space: nowrap; font-size: 20px; line-height: 20px; font-weight: 700;
+  }
+  .tile .metric-reading {
+    position: absolute; inset: auto 8px 8px; display: flex; align-items: flex-end; gap: 2px;
+    height: 20px; white-space: nowrap;
+  }
+  .metric-value { min-width: 0; overflow: hidden; font-size: 20px; line-height: 20px; font-weight: 700; }
+  .metric-value.is-four-char { font-size: 17px; }
+  .metric-unit { display: flex; flex: none; flex-direction: column; max-width: 18px; overflow: hidden; font-size: 10px; line-height: 10px; }
+  .metric-unit span { overflow: hidden; white-space: nowrap; }
   .tile[data-rows="2"]:is([data-type="metric"], [data-type="progress"]) .reading { font-size: 32px; line-height: 32px; }
-  .tile[data-rows="2"]:is([data-type="metric"], [data-type="progress"]) .unit-compact { font-size: 12px; line-height: 12px; }
   .tile[data-rows="2"]:not(:has(.details)) .reading { top: 75px; transform: translateY(-50%); }
   .tile .details { position: absolute; inset: 84px 8px auto; font-size: 12px; line-height: 16px; }
+  .tile[data-type="chart"] { --state: var(--ink); }
+  .value-tag {
+    padding: 1px 3px; border-radius: 2px;
+    background: var(--ink); color: var(--screen); font-size: 8px; line-height: 9px; font-weight: 700;
+  }
+  .chart-value-tag {
+    position: absolute; inset: 30px auto auto 8px; z-index: 1;
+  }
+  .chart-bars { position: absolute; inset: auto 8px 8px; width: calc(100% - 16px); }
+  .chart-bars rect { fill: var(--state); }
+  .trend-delta { margin-left: auto; }
+  .trend-delta[data-direction="up"] { background: #48b34a; color: #1e1e1e; }
+  .trend-delta[data-direction="down"] { background: #d63f41; color: #fff; }
+  .tile[data-rows="2"] .metric-reading { top: 35px; bottom: auto; }
+  .tile[data-type="range"] .metric-reading { top: 28px; bottom: auto; }
+  .range-gauge { position: absolute; inset: auto 8px 8px; height: 6px; }
+  .range-gauge .rail { position: absolute; inset: 3px 0 auto; height: 1px; background: var(--ink); opacity: .55; }
+  .range-gauge .tick { position: absolute; top: 1px; width: 1px; height: 4px; background: var(--ink); }
+  .range-gauge .marker { position: absolute; top: 0; left: var(--position); width: 3px; height: 6px; background: var(--ink); transform: translateX(-50%); }
+  .digit-window { display: inline-block; height: 20px; overflow: hidden; vertical-align: bottom; }
+  .digit-strip { display: flex; flex-direction: column; }
+  .digit-strip.is-animated { transition: transform 300ms ease-out; }
+  .digit-strip span { height: 20px; line-height: 20px; }
   .line { --edge-fade: 4px; overflow: hidden; white-space: nowrap; }
   .track, .line-content { display: inline-block; white-space: nowrap; }
   .duplicate { margin-left: 18px; }
@@ -96,9 +129,16 @@
   }
   .line.holding { mask-image: linear-gradient(to right, #000, #000 calc(100% - var(--edge-fade)), transparent); }
   .status-bar {
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    display: flex; align-items: center; gap: 8px;
     padding: 0 8px; background: var(--surface); font-size: 12px; line-height: 12px;
   }
+  .status-page-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .status-page-dots { display: flex; flex: none; flex-direction: column; gap: 1px; }
+  .status-page-dot { width: 2px; height: 2px; border-radius: 50%; background: var(--ink); opacity: .35; }
+  .status-page-dot.is-current { opacity: 1; }
+  .status-page { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 12px; }
+  .status-info { display: grid; font-size: 6px; line-height: 6px; white-space: nowrap; }
+  .status-right { margin-inline-start: auto; }
   .status-right, .power { display: flex; align-items: center; gap: 4px; flex: none; }
   .status-bar svg { display: block; }
   .message { background: var(--surface); display: grid; place-items: center; font-size: 20px; line-height: 20px; }
@@ -131,7 +171,9 @@
 <body>
 <!-- IconPark @icon-park/svg 1.4.2, Apache-2.0. Adapted to symbols and optically adjusted for device size; battery fill is added locally. See iconpark-license.txt. -->
 <svg class="glyphs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <symbol id="ip-link-one" viewBox="0 0 48 48"><path d="M26.2401 16.373L17.1001 7.23303C14.4388 4.57168 10.0653 4.6303 7.33158 7.36397C4.59791 10.0976 4.53929 14.4712 7.20064 17.1325L15.1359 25.0678" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M32.9027 23.0031L40.838 30.9384C43.4994 33.5998 43.4407 37.9733 40.7071 40.707C37.9734 43.4407 33.5999 43.4993 30.9385 40.8379L21.7985 31.6979" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M26.1093 26.1416C28.843 23.4079 28.9016 19.0344 26.2403 16.373" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M21.7989 21.7984C19.0652 24.5321 19.0066 28.9056 21.6679 31.5669" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-wifi" viewBox="0 0 48 48"><path d="M4 18.9653C4.5888 18.4073 5.19522 17.8786 5.8174 17.3792C17.0371 8.37423 33.3821 8.90292 44 18.9653M38 25.799C30.268 18.067 17.732 18.067 10 25.799M32 32.3137C27.5817 27.8954 20.4183 27.8954 16 32.3137" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="24" cy="37.5" r="2.5" fill="currentColor"/></symbol>
+  <symbol id="ip-bluetooth" viewBox="0 0 48 48"><path d="M12 13L34 34L23 44V4L34 14L12 35" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-usb" viewBox="0 0 48 48"><g stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="4"/><circle cx="36" cy="24" r="4"/><path d="M19 9L24 4L29 9M25 39L12 28.2632V22M36 28V32.7895L24 41M24 4V43M21 44H27"/></g></symbol>
   <symbol id="ip-link-break" viewBox="0 0 48 48"><path d="M32 15H42C43.1046 15 44 15.8954 44 17V31C44 32.1046 43.1046 33 42 33H32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 15H6C4.89543 15 4 15.8954 4 17V31C4 32.1046 4.89543 33 6 33H17" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 6V42" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 24H16" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M32 24H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="ip-loading-four" viewBox="0 0 48 48"><path d="M4 24C4 35.0457 12.9543 44 24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="ip-attention" viewBox="0 0 48 48"><path d="M24 44C29.5228 44 34.5228 41.7614 38.1421 38.1421C41.7614 34.5228 44 29.5228 44 24C44 18.4772 41.7614 13.4772 38.1421 9.85786C34.5228 6.23858 29.5228 4 24 4C18.4772 4 13.4772 6.23858 9.85786 9.85786C6.23858 13.4772 4 18.4772 4 24C4 29.5228 6.23858 34.5228 9.85786 38.1421C13.4772 41.7614 18.4772 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path fill-rule="evenodd" clip-rule="evenodd" d="M24 37C25.3807 37 26.5 35.8807 26.5 34.5C26.5 33.1193 25.3807 32 24 32C22.6193 32 21.5 33.1193 21.5 34.5C21.5 35.8807 22.6193 37 24 37Z" fill="currentColor"/><path d="M24 12V28" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -156,14 +198,20 @@
       <div class="fields">
         <label>主题<select name="theme"><option value="dark">深色</option><option value="light">明亮</option></select></label>
         <label>设备状态<select name="scene"><option value="online">正常显示</option><option value="waiting">等待连接</option><option value="unsynced">等待同步</option><option value="failure">连接失败</option><option value="offline">断线保留画面</option></select></label>
+        <label class="wide">连接方式<select name="connectionMethod"><option value="wifi">Wi-Fi</option><option value="bluetooth">蓝牙</option><option value="usb">USB</option></select></label>
         <div class="colors wide">
           <label>屏幕背景<input name="screen" type="color" value="#1e1e1e"></label>
           <label>卡片底色<input name="surface" type="color" value="#4a4a4a"></label>
           <label>主题字色<input name="ink" type="color" value="#f1f1f1"></label>
         </div>
-        <label>供电<select name="power"><option value="external">外部供电</option><option value="12">电池 12%</option><option value="67">电池 67%</option><option value="100">电池 100%</option><option value="unknown">电量未知</option><option value="charging">充电中 67%</option><option value="unavailable">供电未知</option></select></label>
+        <label>供电<select name="power"><option value="external">外部供电</option><option value="12">电池 12%</option><option value="67">电池 67%</option><option value="100">电池 100%</option><option value="unknown">电量未知</option><option value="charging" selected>充电中 67%</option><option value="unavailable">供电未知</option></select></label>
         <label>上次同步<select name="sync"><option value="yes">有时间</option><option value="no">未同步</option></select></label>
+        <label>当前页<select name="page"></select></label>
         <label>布局示例<select name="layout"><option value="compact">1 × 1 基础</option><option value="wide">1 × 2 双列</option><option value="tall">2 × 2 进度</option><option value="full">1 × 4 通栏</option><option value="tallState">2 × 2 状态</option></select></label>
+        <label>Start<input id="motion-start" type="number" step="any" value="80"></label>
+        <label>End<input id="motion-end" type="number" step="any" value="90"></label>
+        <label class="wide">数值动画<select id="motion-mode"><option value="digitRoll">逐位滚动</option><option value="count">计数动画</option></select></label>
+        <button class="wide" type="button" id="play-number-motion">播放数值动画</button>
         <label class="wide" id="reason-field" hidden>失败原因<textarea name="failureReason" rows="3"></textarea></label>
       </div>
       <hr>
@@ -230,8 +278,12 @@
     error: { label: '运行异常', color: '#d63f41', icon: 'attention' },
     unknown: { label: '状态未知', color: '#9ba5b3', icon: 'help' },
   };
-  const connections = {
-    online: { icon: 'link-one', label: '已连接' },
+  const connectionMethods = {
+    wifi: { icon: 'wifi', label: 'Wi-Fi' },
+    bluetooth: { icon: 'bluetooth', label: '蓝牙' },
+    usb: { icon: 'usb', label: 'USB' },
+  };
+  const connectionStates = {
     waiting: { icon: 'loading-four', label: '等待连接' },
     offline: { icon: 'link-break', label: '已断开' },
     failure: { icon: 'attention', label: '连接失败' },
@@ -240,14 +292,18 @@
     key, { color, seconds: 2, alertInk: 'auto', customInk: '#000000' },
   ]));
   const examples = {
-    quota: { type: 'progress', label: '额度', value: 81, unit: '%', ratio: 0.81, color: '#48b34a' },
-    speed: { type: 'metric', label: '输出速度', value: 248, unit: 'tok/s', unitStyle: 'compact', color: '#397adc' },
-    resets: { type: 'metric', label: '重置卡', value: 0, unit: '张' },
+    quota: { type: 'progress', label: '额度', value: 81, unit: '%', unitLines: ['%'], ratio: 0.81, color: '#48b34a' },
+    speed: { id: 'speed', type: 'metric', label: '输出速度', value: 248, unit: 'tok/s', unitLines: ['tok', '/s'], color: '#397adc' },
+    resets: { type: 'metric', label: '重置卡', value: 0, unit: '张', unitLines: ['张'] },
     recovery: { type: 'metric', label: '额度恢复', value: '5d4h' },
+    cpu: { type: 'chart', label: 'CPU 占用', unit: '%', rangeSeconds: 3600, sampleCount: 12, min: 0, max: 100,
+      points: [18, 26, 22, 42, 35, 61, 48, 73, 54, 88, 67, 79].map((value, index) => ({ timestamp: 1794200000000 + index * 300000, value })) },
+    trend: { type: 'trend', label: 'CPU 趋势', value: 68, unit: '%', delta: 4, direction: 'up' },
+    range: { type: 'range', label: 'CPU 区间', value: 68, unit: '%', min: 0, max: 100 },
   };
   const layouts = {
     compact: [
-      ['quota', 0, 0], ['speed', 1, 0], ['task', 2, 0], ['resets', 3, 0], ['recovery', 0, 1],
+      ['quota', 0, 0], ['speed', 1, 0], ['task', 2, 0], ['resets', 3, 0],
     ],
     wide: [
       ['speed', 0, 0, 2], ['task', 2, 0, 2], ['quota', 0, 1], ['resets', 1, 1], ['recovery', 2, 1],
@@ -262,13 +318,70 @@
       ['task', 0, 0, 2, 2], ['speed', 2, 0, 2], ['quota', 2, 1], ['recovery', 3, 1],
     ],
   };
+  const pages = {
+    codex: { name: 'Codex 软件' },
+    system: { name: '系统', placements: [['cpu', 0, 0], ['trend', 1, 0], ['range', 2, 0]] },
+  };
+  const maxPages = 5;
+  const pageEntries = Object.entries(pages).slice(0, maxPages);
+  fields.page.replaceChildren(...pageEntries.map(([id, page]) => new Option(page.name, id)));
   const titleSample = fields.taskTitle.value;
   const failureReason = '连接超时，请检查电脑端服务是否运行，并确认数据线与设备连接正常后再重试。';
   fields.failureReason.value = failureReason;
-  const lastSync = '2026年11月9日 17:29:30';
+  const lastSync = '17:29:30';
+  const firmwareVersion = 'v0.1.0';
   let currentState = 'running';
   let alertAnimation = 0;
   let reasonAnimation = 0;
+
+  let countFrame = 0;
+  function animateDigitRoll(output, fromValue, toValue, direction) {
+    const from = String(fromValue).padStart(String(toValue).length, ' ');
+    const to = String(toValue).padStart(from.length, ' ');
+    const markup = Array.from(to, (digit, index) => {
+      const firstChar = from[index];
+      const lastChar = digit;
+      if (!/\d/.test(firstChar) || !/\d/.test(lastChar)) return '<span>' + escapeText(lastChar) + '</span>';
+      const first = Number(firstChar);
+      const last = Number(lastChar);
+      if (first === last) return '<span>' + digit + '</span>';
+      const sequence = [];
+      for (let current = first; current !== last; current = (current + direction + 10) % 10) sequence.push(current);
+      sequence.push(last);
+      return '<span class="digit-window"><span class="digit-strip">' +
+        sequence.map((value) => '<span>' + value + '</span>').join('') + '</span></span>';
+    }).join('');
+    output.innerHTML = markup;
+    const strips = [...output.querySelectorAll('.digit-strip')];
+    requestAnimationFrame(() => requestAnimationFrame(() => strips.forEach((strip) => {
+      strip.classList.add('is-animated');
+      strip.style.transform = 'translateY(-' + (strip.children.length - 1) * 20 + 'px)';
+    })));
+  }
+  document.getElementById('play-number-motion').addEventListener('click', () => {
+    cancelAnimationFrame(countFrame);
+    const start = Number(document.getElementById('motion-start').value);
+    const end = Number(document.getElementById('motion-end').value);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+    const output = preview.querySelector('[data-widget="speed"] .metric-value');
+    if (!output) return;
+    setSpeedValue(start);
+    if (document.getElementById('motion-mode').value === 'digitRoll') {
+      animateDigitRoll(output, metricValueText(start), metricValueText(end), end >= start ? 1 : -1);
+      window.setTimeout(() => { setSpeedValue(end); }, 340);
+      return;
+    }
+    const delta = end - start;
+    const duration = Math.min(800, Math.max(300, Math.abs(delta) * 40));
+    const startedAt = performance.now();
+    function countFrameAt(now) {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const precision = Math.max(decimalPlaces(start), decimalPlaces(end));
+      setSpeedValue(Number((start + delta * progress).toFixed(precision)));
+      if (progress < 1) countFrame = requestAnimationFrame(countFrameAt);
+    }
+    countFrame = requestAnimationFrame(countFrameAt);
+  });
 
   function escapeText(text) {
     const element = document.createElement('span');
@@ -294,19 +407,93 @@
     return valueText + '<span' + unitClass + '>' + escapeText(unit) + '</span>';
   }
 
+  function metricValueMarkup(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '<span class="metric-value">' + escapeText(value ?? '—') + '</span>';
+    const compact = metricValueText(value);
+    const sizeClass = compact.length >= 4 ? ' is-four-char' : '';
+    return '<span class="metric-value' + sizeClass + '">' + escapeText(compact.replace(/[KMBT]/g, (suffix) => suffix.toLowerCase())) + '</span>';
+  }
+
+  function metricValueText(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return String(value ?? '—');
+    const raw = String(value);
+    if (raw.length <= 3) return raw;
+    if (Math.abs(numeric) >= 1000) {
+      return new Intl.NumberFormat('en', { notation: 'compact', maximumSignificantDigits: 2 }).format(numeric);
+    }
+    return Math.abs(numeric) >= 10 ? String(Math.round(numeric)) : numeric.toPrecision(1);
+  }
+
+  function decimalPlaces(value) {
+    const text = String(value);
+    return Math.min(3, text.includes('.') ? text.split('.')[1].length : 0);
+  }
+
+  function metricMarkup(card) {
+    const value = metricValueMarkup(card.value);
+    const unitLines = card.unitLines || (card.unit ? [card.unit] : []);
+    const unit = unitLines.length ? '<span class="metric-unit">' + unitLines.slice(0, 2)
+      .map((text) => '<span>' + escapeText(text.slice(0, 3)) + '</span>').join('') + '</span>' : '';
+    let tag = '';
+    if (card.type === 'trend') {
+      const direction = card.direction === 'down' ? 'down' : card.direction === 'up' ? 'up' : 'flat';
+      const arrow = { up: '↑', down: '↓', flat: '→' }[direction];
+      tag = '<span class="value-tag trend-delta" data-direction="' + direction + '">' + escapeText(arrow + card.delta + card.unit) + '</span>';
+    }
+    return '<div class="metric-reading">' + value + unit + tag + '</div>';
+  }
+
+  function setSpeedValue(value) {
+    const tile = preview.querySelector('[data-widget="speed"]');
+    if (!tile) return;
+    const output = tile.querySelector('.metric-value');
+    if (!output) return;
+    output.outerHTML = metricValueMarkup(value);
+  }
+
   function tile(card, w = 1, h = 1, position = '') {
     if (!card) return '<div class="tile" style="' + position + '" aria-hidden="true"></div>';
     const { type, label, color = '#f1f1f1', ratio = 0, details = [], alertInk, alertMix = 0, inkMix = 0 } = card;
-    const styles = ['--state:' + color];
+    const styles = type === 'chart' ? [] : ['--state:' + color];
     if (position) styles.push(position);
     if (type === 'progress') styles.push('--progress:' + Math.round((79 * w - 4) * ratio) + 'px');
     if (alertInk) styles.push('--alert-ink:' + alertInk, '--alert-mix:' + alertMix + '%', '--ink-mix:' + inkMix + '%');
+    if (type === 'chart') {
+      const range = Math.max(1, card.max - card.min);
+      const chartHeight = 27;
+      const blockHeight = 3;
+      const rowPitch = blockHeight + 1;
+      const levels = Math.floor((chartHeight + 1) / rowPitch);
+      const bars = Array.from({ length: card.sampleCount }, (_, index) => {
+        const point = card.points[index];
+        const level = point ? Math.max(0, Math.min(levels, Math.round(((point.value - card.min) / range) * levels))) : 0;
+        return Array.from({ length: level }, (_, row) =>
+          '<rect x="' + (index * 5) + '" y="' + (chartHeight - blockHeight - row * rowPitch) + '" width="4" height="' + blockHeight + '" />').join('');
+      }).join('');
+      const latest = card.points[card.points.length - 1];
+      return '<div class="tile" data-type="chart" style="' + styles.join(';') + '"><div class="tile-bar"></div>' +
+        line('label', escapeText(label)) + '<span class="value-tag chart-value-tag">' + escapeText(latest.value + card.unit) + '</span>' +
+        '<svg class="chart-bars" height="' + chartHeight + '" viewBox="0 0 59 ' + chartHeight + '" preserveAspectRatio="none" role="img" aria-label="' +
+        escapeText(label + '，' + card.points.length + '个采样点') + '">' + bars + '</svg></div>';
+    }
+    if (type === 'range') {
+      const span = Math.max(1, card.max - card.min);
+      const positionPercent = Math.max(0, Math.min(100, ((card.value - card.min) / span) * 100));
+      return '<div class="tile" data-type="range" style="' + styles.join(';') + '"><div class="tile-bar"></div>' +
+        line('label', escapeText(label)) + metricMarkup(card) +
+        '<div class="range-gauge" style="--position:' + positionPercent + '%" role="img" aria-label="范围 ' +
+        escapeText(card.min + card.unit + ' 到 ' + card.max + card.unit) + '"><i class="rail"></i>' +
+        '<i class="tick" style="left:0"></i><i class="tick" style="left:50%"></i><i class="tick" style="left:100%"></i>' +
+        '<i class="marker"></i></div></div>';
+    }
     const bar = '<div class="tile-bar">' + (type === 'progress' ? '<i></i>' : '') + '</div>';
     const supplemental = h === 2 && details.length
       ? '<div class="details">' + details.slice(0, 2).map((detail) => line('detail', escapeText(detail))).join('') + '</div>'
       : '';
-    return '<div class="tile" data-type="' + type + '" data-rows="' + h + '" style="' + styles.join(';') + '">' +
-      bar + line('label', escapeText(label)) + line('reading', readingMarkup(card)) + supplemental + '</div>';
+    return '<div class="tile" data-widget="' + escapeText(card.id || '') + '" data-type="' + type + '" data-rows="' + h + '" style="' + styles.join(';') + '">' +
+      bar + line('label', escapeText(label)) + (['metric', 'progress', 'trend'].includes(type) ? metricMarkup(card) : line('reading', readingMarkup(card))) + supplemental + '</div>';
   }
 
   function taskCard(state, title, elapsed = 0) {
@@ -327,16 +514,25 @@
       '<span>' + (Number.isFinite(charge) ? charge + '%' : '—') + '</span>';
   }
 
-  function status(scene, power, synced) {
-    const connection = connections[scene === 'unsynced' ? 'online' : scene];
+  function status(pageId, scene, power, synced, connectionMethod) {
+    const state = connectionStates[scene];
+    const connection = state ?? connectionMethods[connectionMethod];
+    const connectionLabel = state?.label ?? connection.label + (scene === 'unsynced' ? ' 等待同步' : ' 已连接');
     const showTime = synced && (scene === 'online' || scene === 'offline');
-    return '<div class="status-bar"><span>' + (showTime ? lastSync : '—') + '</span><span class="status-right">' +
-      icon(connection.icon, 14, connection.label) +
+    const pageIndex = pageEntries.findIndex(([id]) => id === pageId);
+    const dots = Array.from({ length: maxPages }, (_, index) =>
+      '<span class="status-page-dot' + (index === pageIndex ? ' is-current' : '') + '"></span>'
+    ).join('');
+    return '<div class="status-bar"><span class="status-page-group">' +
+      '<span class="status-page-dots" role="img" aria-label="当前第 ' + (pageIndex + 1) + ' 页，预览 ' + maxPages + ' 个圆点">' + dots + '</span>' +
+      '<span class="value-tag status-page">' + escapeText(pages[pageId].name) + '</span></span>' +
+      '<span class="status-info"><span class="status-time">Updated at ' + (showTime ? lastSync : '—') + '</span>' +
+      '<span>FW ' + firmwareVersion + '</span></span><span class="status-right">' +
+      icon(connection.icon, 14, connectionLabel) +
       '<span class="power">' + powerStatus(power) + '</span></span></div>';
   }
 
-  function gridMarkup(layout, cards) {
-    const placements = layouts[layout];
+  function gridMarkup(placements, cards) {
     const position = (x, y, w, h) => 'grid-area:' + (y + 1) + '/' + (x + 1) + '/span ' + h + '/span ' + w;
     const filled = placements.map(([id, x, y, w = 1, h = 1]) => tile(cards[id], w, h, position(x, y, w, h)));
     const empty = [];
@@ -350,15 +546,17 @@
     return '<div class="device-grid">' + filled.join('') + empty.join('') + '</div>';
   }
 
-  function screen(theme, scene, power, synced, title, state, reason = failureReason, layout = 'compact') {
+  function screen(theme, scene, power, synced, title, state, reason = failureReason, layout = 'compact',
+    { pageId = 'codex', connectionMethod = 'wifi' } = {}) {
+    const page = pages[pageId];
     const body = scene === 'failure'
       ? '<div class="message failure"><div class="message-title">' + icon('attention', 16, '失败') +
         '连接失败</div><div class="reason">' + escapeText(reason) + '</div></div>'
       : scene === 'waiting' || scene === 'unsynced'
         ? '<div class="message">' + (scene === 'waiting' ? '等待连接' : '等待同步') + '</div>'
-        : gridMarkup(layout, { ...examples, task: taskCard(state, title) });
+        : gridMarkup(page.placements ?? layouts[layout], { ...examples, task: taskCard(state, title) });
     return '<div class="device" data-theme="' + theme + '" aria-label="320 × 170 设备屏">' +
-      body + status(scene, power, synced) + '</div>';
+      body + status(pageId, scene, power, synced, connectionMethod) + '</div>';
   }
 
   function measureMarquees(root, still = false) {
@@ -468,9 +666,14 @@
 
   function renderPreview() {
     cancelAnimationFrame(alertAnimation);
+    const codexPage = fields.page.value === 'codex';
+    fields.layout.disabled = !codexPage;
+    document.getElementById('play-number-motion').disabled = !codexPage;
+    form.querySelector('button[type="submit"]').disabled = !codexPage;
     document.getElementById('reason-field').hidden = fields.scene.value !== 'failure';
     preview.innerHTML = screen(fields.theme.value, fields.scene.value, fields.power.value,
-      fields.sync.value === 'yes', getTitle(), currentState, fields.failureReason.value.trim() || '—', fields.layout.value);
+      fields.sync.value === 'yes', getTitle(), currentState, fields.failureReason.value.trim() || '—', fields.layout.value,
+      { pageId: fields.page.value, connectionMethod: fields.connectionMethod.value });
     styleTheme();
     styleTask();
     measureMarquees(preview);
@@ -498,7 +701,7 @@
     } else if (name in themeColors[fields.theme.value]) {
       themeColors[fields.theme.value][name] = event.target.value;
       styleTheme();
-    } else if (['scene', 'power', 'sync', 'failureReason', 'layout'].includes(name)) {
+    } else if (['page', 'scene', 'connectionMethod', 'power', 'sync', 'failureReason', 'layout'].includes(name)) {
       renderPreview();
     } else if (name === 'taskState') {
       loadStateFields();
@@ -521,6 +724,7 @@
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (fields.page.value !== 'codex') return;
     cancelAnimationFrame(alertAnimation);
     currentState = fields.taskState.value;
     if (!preview.querySelector('[data-type="state"]')) {
@@ -578,7 +782,8 @@
   }
 
   const iconGroups = [
-    Object.values(connections).map((entry) => iconKey(entry.label, icon(entry.icon, 14, entry.label))),
+    [...Object.values(connectionMethods), ...Object.values(connectionStates)]
+      .map((entry) => iconKey(entry.label, icon(entry.icon, 14, entry.label))),
     [['外部供电', 'external'], ['低电量', '12'], ['电池供电', '67'], ['满电', '100'], ['电量未知', 'unknown'],
       ['充电中', 'charging'], ['供电未知', 'unavailable']].map(([label, power]) => iconKey(label, powerStatus(power))),
     Object.values(tasks).map((task) => iconKey(task.label, icon(task.icon, 16, task.label))),

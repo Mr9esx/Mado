@@ -23,8 +23,56 @@
 | `codex.speed` | `metric` | `value`，长单位 `tok/s` |
 | `codex.quota-reset` | `metric` | `deadlineUnixMs`，倒计时格式 |
 | `codex.task` | `state` | `state` 与 `detail`，定义声明支持的状态键 |
+| `system.cpu-trend` | `trend` | 当前 `value`、`delta` 和方向 `direction` |
+| `system.cpu-range` | `range` | 当前 `value`、`min`、`max` 和单位 |
+| `system.cpu-usage-history` | `chart` | 带时间戳的数值采样点；范围、单位、值域和系列类型属于定义元数据 |
 
 组件定义声明 `supportedSpans`，至少包含 1 × 1。2 × 2 可展示该组件定义允许的辅助字段。额度与额度恢复各有独立的定义、卡片和读数。v1 沿用当前同一组件只能放一张的限制，卡片 ID 为后续扩展保留独立身份。
+
+带单位的组件可在定义中提供 `unitLines`，固定单位最多两行、每行最多三个字符，并始终保留在读数行右侧。数值读数不参与文本滚动；过宽时按 `numberFormat` 规则缩写为普通文字，不隐藏或移动单位。原型里的输出速度单位为 `tok/s`，拆成 `tok` 和 `/s` 两行。
+
+数值组件可通过 `numberAnimation` 选择变化效果：`digitRoll` 只滚动发生变化的数位；`count` 逐个展示旧值与新值之间的整数，递减时反向计数。连续收到新值时取消当前动画并以最新值重新开始。
+
+```json
+{
+  "widgetId": "codex.speed",
+  "kind": "metric",
+  "numberFormat": "compact",
+  "unitLines": ["tok", "/s"],
+  "numberAnimation": "digitRoll"
+}
+```
+
+### 图表定义与读数
+
+图表组件定义负责描述如何解释采样点；实时读数帧只传点列。1 × 1 卡片默认只显示标题和图表本体，不把时间范围、单位、上下限挤进卡片。它们仍作为元数据保留，供数据标注、校验和更大尺寸的展示使用。首个原型使用柱状图，后续可扩展折线图。
+
+```json
+{
+  "widgetId": "system.cpu-usage-history",
+  "binding": { "source": "system", "key": "cpuUsage" },
+  "kind": "chart",
+  "label": "CPU 占用",
+  "unit": "%",
+  "chart": { "series": "bar", "rangeSeconds": 3600, "sampleCount": 12, "min": 0, "max": 100 },
+  "supportedSpans": [{ "w": 1, "h": 1 }]
+}
+```
+
+采样点按时间升序排列，时间使用 Unix 毫秒，值使用数值类型。时间范围、上下限和固定采样列数属于组件定义。原型按 12 列显示，柱体由 4 × 3 px 色块堆叠，横纵间距均为 1 px，柱体底边距卡片 8 px。数值依 `min` 到 `max` 映射为 0–7 格高度。
+
+```json
+{
+  "kind": "chart",
+  "points": [
+    { "timestamp": 1794250800000, "value": 18 },
+    { "timestamp": 1794251100000, "value": 42 },
+    { "timestamp": 1794251400000, "value": 73 }
+  ]
+}
+```
+
+图表数据为空时显示空图表占位；只有有限数值才参与绘图。数据源按定义的时间范围筛选采样点，设备按 `min`、`max` 归一化柱高或折线纵坐标。
 
 例如任务组件声明自己的状态键和可用规格。新增一个数据源时，只需按通用类型注册组件。
 
