@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local-windows",
+  "description": "Allow the editor and virtual display to receive simulator events.",
+  "windows": [
+    "main",
+    "display"
+  ],
+  "permissions": [
+    "core:event:default"
+  ]
+}

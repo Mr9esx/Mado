@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TDisplay 设备屏原型</title>
+<style>
+  @font-face {
+    font-family: Maple;
+    src: url("../src/assets/MapleMono-NF-CN-Regular.woff2") format("woff2");
+    font-display: swap;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #eeede9; color: #222;
+    font: 14px/1.5 "Avenir Next", "PingFang SC", sans-serif;
+  }
+  main { max-width: 920px; margin: auto; padding: 32px 24px; }
+  h1, h2, h3, p, figure { margin: 0; }
+  h1 { font-size: 28px; letter-spacing: -.04em; }
+  h2 { font-size: 21px; letter-spacing: -.03em; }
+  h3 { font-size: 14px; font-weight: 650; }
+  .eyebrow, .frame-index { font: 14px/1.4 Maple, monospace; color: #64615a; }
+  .intro { margin-bottom: 16px; }
+  .workbench { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(344px, 1fr); border: 1px solid #c9c5bc; }
+  .settings { display: grid; gap: 14px; padding: 16px; background: #f8f7f3; }
+  .settings h2 { font-size: 16px; }
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  label { display: grid; gap: 4px; }
+  label[hidden] { display: none; }
+  .wide { grid-column: 1 / -1; }
+  select, input, button, textarea {
+    min-width: 0; height: 34px; border: 1px solid #c9c5bc; border-radius: 5px;
+    padding: 0 8px; background: #fff; color: inherit; font: inherit;
+  }
+  textarea { height: auto; padding: 6px 8px; resize: vertical; }
+  input[type="color"] { width: 100%; padding: 3px; }
+  button { background: #222; color: #fff; border-color: #222; cursor: pointer; }
+  button:hover { background: #3e3e3e; }
+  :focus-visible { outline: 2px solid #397adc; outline-offset: 2px; }
+  .colors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .settings hr { width: 100%; margin: 0; border: 0; border-top: 1px solid #d8d5ce; }
+  .stage {
+    display: grid; align-content: center; justify-items: center; gap: 10px; min-width: 0;
+    padding: 16px 8px; background: #e3e0d8;
+  }
+  .stage figcaption { color: #5c5850; }
+  .board { max-width: 748px; margin: 28px auto 0; padding: 22px; background: #f8f7f3; border: 1px solid #c9c5bc; }
+  .board-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 16px; }
+  .frames { display: grid; grid-template-columns: repeat(2, 320px); justify-content: space-between; gap: 16px 12px; }
+  .frames figcaption, .phases figcaption { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .phase-section { border-top: 1px solid #d8d5ce; margin-top: 18px; padding-top: 14px; }
+  .phases { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 10px; }
+  .phases figure { width: 108px; }
+  .icon-keys { display: grid; gap: 12px; margin-top: 10px; }
+  .icon-key-group { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+  .icon-key-group:nth-child(2) { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); }
+  .icon-key { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .icon-sample {
+    display: flex; align-items: center; justify-content: center; min-width: 24px; height: 24px;
+    padding-inline: 3px; background: #4a4a4a; color: #f1f1f1; font: 12px/1 Maple, monospace;
+  }
+  .glyphs { position: absolute; width: 0; height: 0; }
+  .device {
+    --screen: #1e1e1e; --surface: #4a4a4a; --ink: #f1f1f1;
+    width: 320px; height: 170px; padding: 4px; display: grid; grid-template: 132px 26px / minmax(0, 1fr); gap: 4px;
+    overflow: hidden; background: var(--screen); color: var(--ink); font: 12px/1 Maple, monospace;
+  }
+  .device[data-theme="light"] { --screen: #e3e3e3; --surface: #fafafa; --ink: #242424; }
+  .device-grid { display: grid; grid-template-columns: repeat(4, 75px); grid-template-rows: repeat(2, 64px); gap: 4px; }
+  .tile {
+    --alert-mix: 0%; --ink-mix: 0%;
+    position: relative; width: 75px; height: 64px; overflow: hidden;
+    background: color-mix(in srgb, var(--surface), var(--state, var(--surface)) var(--alert-mix));
+    color: color-mix(in srgb, var(--ink), var(--alert-ink, var(--ink)) var(--ink-mix));
+  }
+  .device-grid .tile { width: auto; height: auto; }
+  .tile-bar {
+    position: absolute; inset: 0 0 auto; height: 4px;
+    background: var(--state);
+  }
+  .tile[data-type="progress"] .tile-bar { background: color-mix(in srgb, var(--ink) 28%, var(--surface)); }
+  .tile-bar > i { display: block; width: var(--progress); height: 4px; background: var(--state); }
+  .tile .label { position: absolute; inset: 12px 8px auto; font-size: 12px; line-height: 14px; }
+  .tile .reading { position: absolute; inset: 36px 8px auto; font-size: 20px; line-height: 20px; font-weight: 700; }
+  .tile .unit-compact { margin-inline-start: 2px; font-size: 10px; line-height: 10px; }
+  .tile[data-rows="2"]:is([data-type="metric"], [data-type="progress"]) .reading { font-size: 32px; line-height: 32px; }
+  .tile[data-rows="2"]:is([data-type="metric"], [data-type="progress"]) .unit-compact { font-size: 12px; line-height: 12px; }
+  .tile[data-rows="2"]:not(:has(.details)) .reading { top: 75px; transform: translateY(-50%); }
+  .tile .details { position: absolute; inset: 84px 8px auto; font-size: 12px; line-height: 16px; }
+  .line { --edge-fade: 4px; overflow: hidden; white-space: nowrap; }
+  .track, .line-content { display: inline-block; white-space: nowrap; }
+  .duplicate { margin-left: 18px; }
+  .line.overflowing {
+    mask-image: linear-gradient(to right, transparent, #000 var(--edge-fade), #000 calc(100% - var(--edge-fade)), transparent);
+  }
+  .line.holding { mask-image: linear-gradient(to right, #000, #000 calc(100% - var(--edge-fade)), transparent); }
+  .status-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 0 8px; background: var(--surface); font-size: 12px; line-height: 12px;
+  }
+  .status-right, .power { display: flex; align-items: center; gap: 4px; flex: none; }
+  .status-bar svg { display: block; }
+  .message { background: var(--surface); display: grid; place-items: center; font-size: 20px; line-height: 20px; }
+  .message.failure { grid-template-rows: 20px minmax(0, 1fr); place-items: stretch; gap: 4px; padding: 8px; }
+  .message-title { display: flex; align-items: center; gap: 5px; }
+  .message-title svg { color: #d63f41; flex: none; }
+  .message .reason {
+    --fade-top: 0px; --fade-bottom: 0px;
+    overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 14px;
+  }
+  .reason.is-scrolling {
+    mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
+  }
+  .reason.has-above { --fade-top: 4px; }
+  .reason.has-below { --fade-bottom: 4px; }
+  .phases .tile { --surface: #4a4a4a; --ink: #f1f1f1; font-family: Maple, monospace; }
+  @media (max-width: 750px) {
+    main { padding: 16px 8px; }
+    .workbench { grid-template-columns: 1fr; }
+    .board { padding: 14px 8px; }
+    .frames { grid-template-columns: 320px; }
+    .board-heading { flex-wrap: wrap; }
+  }
+  @media (max-width: 356px) {
+    main, .board, .stage { padding-inline: 0; }
+    .board, .workbench { border-inline: 0; }
+  }
+</style>
+</head>
+<body>
+<!-- IconPark @icon-park/svg 1.4.2, Apache-2.0. Adapted to symbols and optically adjusted for device size; battery fill is added locally. See iconpark-license.txt. -->
+<svg class="glyphs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <symbol id="ip-link-one" viewBox="0 0 48 48"><path d="M26.2401 16.373L17.1001 7.23303C14.4388 4.57168 10.0653 4.6303 7.33158 7.36397C4.59791 10.0976 4.53929 14.4712 7.20064 17.1325L15.1359 25.0678" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M32.9027 23.0031L40.838 30.9384C43.4994 33.5998 43.4407 37.9733 40.7071 40.707C37.9734 43.4407 33.5999 43.4993 30.9385 40.8379L21.7985 31.6979" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M26.1093 26.1416C28.843 23.4079 28.9016 19.0344 26.2403 16.373" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M21.7989 21.7984C19.0652 24.5321 19.0066 28.9056 21.6679 31.5669" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-link-break" viewBox="0 0 48 48"><path d="M32 15H42C43.1046 15 44 15.8954 44 17V31C44 32.1046 43.1046 33 42 33H32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 15H6C4.89543 15 4 15.8954 4 17V31C4 32.1046 4.89543 33 6 33H17" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 6V42" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 24H16" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M32 24H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-loading-four" viewBox="0 0 48 48"><path d="M4 24C4 35.0457 12.9543 44 24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-attention" viewBox="0 0 48 48"><path d="M24 44C29.5228 44 34.5228 41.7614 38.1421 38.1421C41.7614 34.5228 44 29.5228 44 24C44 18.4772 41.7614 13.4772 38.1421 9.85786C34.5228 6.23858 29.5228 4 24 4C18.4772 4 13.4772 6.23858 9.85786 9.85786C6.23858 13.4772 4 18.4772 4 24C4 29.5228 6.23858 34.5228 9.85786 38.1421C13.4772 41.7614 18.4772 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path fill-rule="evenodd" clip-rule="evenodd" d="M24 37C25.3807 37 26.5 35.8807 26.5 34.5C26.5 33.1193 25.3807 32 24 32C22.6193 32 21.5 33.1193 21.5 34.5C21.5 35.8807 22.6193 37 24 37Z" fill="currentColor"/><path d="M24 12V28" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-plug-one" viewBox="0 0 48 48"><g transform="translate(24 24) scale(.9) translate(-22 -24)"><rect x="12" y="12" width="24" height="24" rx="3" fill="none" stroke="currentColor" stroke-width="3.5"/><path d="M24 36V41C24 42.6569 22.6569 44 21 44H8" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 12V4" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M28 12V4" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 24H26" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g></symbol>
+  <symbol id="ip-battery-empty" viewBox="0 0 48 48"><g transform="translate(-1 0)"><path d="M38 14H6C4.89543 14 4 14.8954 4 16V32C4 33.1046 4.89543 34 6 34H38C39.1046 34 40 33.1046 40 32V16C40 14.8954 39.1046 14 38 14Z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M42 20H44C45.1046 20 46 20.8954 46 22V26C46 27.1046 45.1046 28 44 28H42V20Z" fill="currentColor"/><rect x="8" y="19" height="10" fill="currentColor" style="width:var(--charge,0px)"/></g></symbol>
+  <symbol id="ip-battery-charge" viewBox="0 0 48 48"><g transform="translate(-1 0)"><path d="M13 14H6C4.89543 14 4 14.8954 4 16V32C4 33.1046 4.89543 34 6 34H13" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M31 34H38C39.1046 34 40 33.1046 40 32V16C40 14.8954 39.1046 14 38 14H31" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M22.002 14L17 24.0012H27.004L22 34" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M42 20H44C45.1046 20 46 20.8954 46 22V26C46 27.1046 45.1046 28 44 28H42V20Z" fill="currentColor"/></g></symbol>
+  <symbol id="ip-play" viewBox="0 0 48 48"><path d="M24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M20 24V17.0718L26 20.5359L32 24L26 27.4641L20 30.9282V24Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-check-one" viewBox="0 0 48 48"><path d="M24 44C29.5228 44 34.5228 41.7614 38.1421 38.1421C41.7614 34.5228 44 29.5228 44 24C44 18.4772 41.7614 13.4772 38.1421 9.85786C34.5228 6.23858 29.5228 4 24 4C18.4772 4 13.4772 6.23858 9.85786 9.85786C6.23858 13.4772 4 18.4772 4 24C4 29.5228 6.23858 34.5228 9.85786 38.1421C13.4772 41.7614 18.4772 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 24L22 30L34 18" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-forbid" viewBox="0 0 48 48"><path fill-rule="evenodd" clip-rule="evenodd" d="M24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 15L33 33" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-help" viewBox="0 0 48 48"><path d="M24 44C29.5228 44 34.5228 41.7614 38.1421 38.1421C41.7614 34.5228 44 29.5228 44 24C44 18.4772 41.7614 13.4772 38.1421 9.85786C34.5228 6.23858 29.5228 4 24 4C18.4772 4 13.4772 6.23858 9.85786 9.85786C6.23858 13.4772 4 18.4772 4 24C4 29.5228 6.23858 34.5228 9.85786 38.1421C13.4772 41.7614 18.4772 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M24 28.6248V24.6248C27.3137 24.6248 30 21.9385 30 18.6248C30 15.3111 27.3137 12.6248 24 12.6248C20.6863 12.6248 18 15.3111 18 18.6248" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path fill-rule="evenodd" clip-rule="evenodd" d="M24 37.6248C25.3807 37.6248 26.5 36.5055 26.5 35.1248C26.5 33.7441 25.3807 32.6248 24 32.6248C22.6193 32.6248 21.5 33.7441 21.5 35.1248C21.5 36.5055 22.6193 37.6248 24 37.6248Z" fill="currentColor"/></symbol>
+</svg>
+
+<main>
+  <header class="intro">
+    <p class="eyebrow">TDISPLAY C5 · 320 × 170</p>
+    <h1>设备屏交互原型</h1>
+  </header>
+
+  <section class="workbench" aria-label="设备屏设置与预览">
+    <form id="controls" class="settings">
+      <h2>屏幕外观</h2>
+      <div class="fields">
+        <label>主题<select name="theme"><option value="dark">深色</option><option value="light">明亮</option></select></label>
+        <label>设备状态<select name="scene"><option value="online">正常显示</option><option value="waiting">等待连接</option><option value="unsynced">等待同步</option><option value="failure">连接失败</option><option value="offline">断线保留画面</option></select></label>
+        <div class="colors wide">
+          <label>屏幕背景<input name="screen" type="color" value="#1e1e1e"></label>
+          <label>卡片底色<input name="surface" type="color" value="#4a4a4a"></label>
+          <label>主题字色<input name="ink" type="color" value="#f1f1f1"></label>
+        </div>
+        <label>供电<select name="power"><option value="external">外部供电</option><option value="12">电池 12%</option><option value="67">电池 67%</option><option value="100">电池 100%</option><option value="unknown">电量未知</option><option value="charging">充电中 67%</option><option value="unavailable">供电未知</option></select></label>
+        <label>上次同步<select name="sync"><option value="yes">有时间</option><option value="no">未同步</option></select></label>
+        <label>布局示例<select name="layout"><option value="compact">1 × 1 基础</option><option value="wide">1 × 2 双列</option><option value="tall">2 × 2 进度</option><option value="full">1 × 4 通栏</option><option value="tallState">2 × 2 状态</option></select></label>
+        <label class="wide" id="reason-field" hidden>失败原因<textarea name="failureReason" rows="3"></textarea></label>
+      </div>
+      <hr>
+      <h2>Codex 任务状态提醒</h2>
+      <div class="fields">
+        <label>试播状态<select name="taskState"><option value="completed">已完成</option><option value="error">运行异常</option><option value="running">运行中</option><option value="interrupted">已中断</option><option value="unknown">状态未知</option></select></label>
+        <label>闪烁时长（秒）<input name="seconds" type="number" min="0" max="10" step="1" value="2" required></label>
+        <label>状态颜色<input name="stateColor" type="color" value="#48b34a" list="status-colors"></label>
+        <datalist id="status-colors">
+          <option value="#f1f1f1"></option><option value="#d63f41"></option><option value="#48b34a"></option>
+          <option value="#397adc"></option><option value="#de7b3c"></option><option value="#9267cd"></option>
+          <option value="#d3ad3e"></option><option value="#349e9a"></option><option value="#c96091"></option>
+          <option value="#9ba5b3"></option>
+        </datalist>
+        <label>提醒字色<select name="alertInk"><option value="auto">自动</option><option value="custom">自定义</option></select></label>
+        <label class="wide" id="custom-ink" hidden>自定义提醒字色<input name="customInk" type="color" value="#000000"></label>
+        <label class="wide">对话标题<input name="taskTitle" value="整理设备屏显示和同步状态"></label>
+        <button class="wide" type="submit">试播提醒</button>
+      </div>
+    </form>
+    <figure class="stage">
+      <div id="preview"></div>
+      <figcaption>实际像素 · 模拟数据</figcaption>
+    </figure>
+  </section>
+
+  <section class="board" id="span-board">
+    <header class="board-heading">
+      <h2>跨格卡片原型</h2>
+      <p class="eyebrow">行 × 列 · 1:1</p>
+    </header>
+    <div class="frames" id="span-frames"></div>
+  </section>
+
+  <section class="board" id="storyboard">
+    <header class="board-heading">
+      <h2>设备屏状态原型</h2>
+      <p class="eyebrow">320 × 170 · 1:1</p>
+    </header>
+    <div class="frames" id="frames"></div>
+    <section class="phase-section" aria-labelledby="phase-heading">
+      <h3 id="phase-heading">任务状态切换 · 运行中 → 已完成</h3>
+      <div class="phases" id="phases"></div>
+    </section>
+    <section class="phase-section" aria-labelledby="icon-heading">
+      <h3 id="icon-heading">IconPark 状态图标</h3>
+      <div class="icon-keys" id="icon-keys"></div>
+    </section>
+  </section>
+</main>
+
+<script>
+  const form = document.getElementById('controls');
+  const fields = form.elements;
+  const preview = document.getElementById('preview');
+  const themeColors = {
+    dark: { screen: '#1e1e1e', surface: '#4a4a4a', ink: '#f1f1f1' },
+    light: { screen: '#e3e3e3', surface: '#fafafa', ink: '#242424' },
+  };
+  const tasks = {
+    running: { label: '运行中', color: '#397adc', icon: 'play' },
+    completed: { label: '已完成', color: '#48b34a', icon: 'check-one' },
+    interrupted: { label: '已中断', color: '#de7b3c', icon: 'forbid' },
+    error: { label: '运行异常', color: '#d63f41', icon: 'attention' },
+    unknown: { label: '状态未知', color: '#9ba5b3', icon: 'help' },
+  };
+  const connections = {
+    online: { icon: 'link-one', label: '已连接' },
+    waiting: { icon: 'loading-four', label: '等待连接' },
+    offline: { icon: 'link-break', label: '已断开' },
+    failure: { icon: 'attention', label: '连接失败' },
+  };
+  const stateSettings = Object.fromEntries(Object.entries(tasks).map(([key, { color }]) => [
+    key, { color, seconds: 2, alertInk: 'auto', customInk: '#000000' },
+  ]));
+  const examples = {
+    quota: { type: 'progress', label: '额度', value: 81, unit: '%', ratio: 0.81, color: '#48b34a' },
+    speed: { type: 'metric', label: '输出速度', value: 248, unit: 'tok/s', unitStyle: 'compact', color: '#397adc' },
+    resets: { type: 'metric', label: '重置卡', value: 0, unit: '张' },
+    recovery: { type: 'metric', label: '额度恢复', value: '5d4h' },
+  };
+  const layouts = {
+    compact: [
+      ['quota', 0, 0], ['speed', 1, 0], ['task', 2, 0], ['resets', 3, 0], ['recovery', 0, 1],
+    ],
+    wide: [
+      ['speed', 0, 0, 2], ['task', 2, 0, 2], ['quota', 0, 1], ['resets', 1, 1], ['recovery', 2, 1],
+    ],
+    tall: [
+      ['quota', 0, 0, 2, 2], ['task', 2, 0, 2], ['speed', 2, 1], ['recovery', 3, 1],
+    ],
+    full: [
+      ['task', 0, 0, 4], ['quota', 0, 1, 2], ['speed', 2, 1], ['recovery', 3, 1],
+    ],
+    tallState: [
+      ['task', 0, 0, 2, 2], ['speed', 2, 0, 2], ['quota', 2, 1], ['recovery', 3, 1],
+    ],
+  };
+  const titleSample = fields.taskTitle.value;
+  const failureReason = '连接超时，请检查电脑端服务是否运行，并确认数据线与设备连接正常后再重试。';
+  fields.failureReason.value = failureReason;
+  const lastSync = '2026年11月9日 17:29:30';
+  let currentState = 'running';
+  let alertAnimation = 0;
+  let reasonAnimation = 0;
+
+  function escapeText(text) {
+    const element = document.createElement('span');
+    element.textContent = text;
+    return element.innerHTML;
+  }
+
+  function icon(id, size, label, style = '') {
+    return '<svg width="' + size + '" height="' + size + '" role="img" aria-label="' + label +
+      '" fill="none"' + style + '><use href="#ip-' + id + '"></use></svg>';
+  }
+
+  function line(classes, html) {
+    return '<div class="line ' + classes + '"><span class="track"><span class="line-content">' +
+      html + '</span></span></div>';
+  }
+
+  function readingMarkup({ value, unit, unitStyle }) {
+    if (value == null) return '—';
+    const valueText = escapeText(value);
+    if (!unit) return valueText;
+    const unitClass = unitStyle === 'compact' ? ' class="unit-compact"' : '';
+    return valueText + '<span' + unitClass + '>' + escapeText(unit) + '</span>';
+  }
+
+  function tile(card, w = 1, h = 1, position = '') {
+    if (!card) return '<div class="tile" style="' + position + '" aria-hidden="true"></div>';
+    const { type, label, color = '#f1f1f1', ratio = 0, details = [], alertInk, alertMix = 0, inkMix = 0 } = card;
+    const styles = ['--state:' + color];
+    if (position) styles.push(position);
+    if (type === 'progress') styles.push('--progress:' + Math.round((79 * w - 4) * ratio) + 'px');
+    if (alertInk) styles.push('--alert-ink:' + alertInk, '--alert-mix:' + alertMix + '%', '--ink-mix:' + inkMix + '%');
+    const bar = '<div class="tile-bar">' + (type === 'progress' ? '<i></i>' : '') + '</div>';
+    const supplemental = h === 2 && details.length
+      ? '<div class="details">' + details.slice(0, 2).map((detail) => line('detail', escapeText(detail))).join('') + '</div>'
+      : '';
+    return '<div class="tile" data-type="' + type + '" data-rows="' + h + '" style="' + styles.join(';') + '">' +
+      bar + line('label', escapeText(label)) + line('reading', readingMarkup(card)) + supplemental + '</div>';
+  }
+
+  function taskCard(state, title, elapsed = 0) {
+    const settings = stateSettings[state];
+    return {
+      type: 'state', label: tasks[state].label, value: title, color: settings.color,
+      details: ['来源 Codex', '项目 TDisplay'], alertInk: alertTextColor(settings), ...alertFrame(elapsed),
+    };
+  }
+
+  function powerStatus(power) {
+    if (power === 'external') return icon('plug-one', 18, '外部供电');
+    if (power === 'unavailable') return '<span aria-label="供电来源未知">—</span>';
+    if (power === 'charging') return icon('battery-charge', 18, '正在充电') + '<span>67%</span>';
+    const charge = Number(power);
+    const fill = Number.isFinite(charge) ? Math.round(charge * 28 / 100) : 0;
+    return icon('battery-empty', 18, '电池', ' style="--charge:' + fill + 'px"') +
+      '<span>' + (Number.isFinite(charge) ? charge + '%' : '—') + '</span>';
+  }
+
+  function status(scene, power, synced) {
+    const connection = connections[scene === 'unsynced' ? 'online' : scene];
+    const showTime = synced && (scene === 'online' || scene === 'offline');
+    return '<div class="status-bar"><span>' + (showTime ? lastSync : '—') + '</span><span class="status-right">' +
+      icon(connection.icon, 14, connection.label) +
+      '<span class="power">' + powerStatus(power) + '</span></span></div>';
+  }
+
+  function gridMarkup(layout, cards) {
+    const placements = layouts[layout];
+    const position = (x, y, w, h) => 'grid-area:' + (y + 1) + '/' + (x + 1) + '/span ' + h + '/span ' + w;
+    const filled = placements.map(([id, x, y, w = 1, h = 1]) => tile(cards[id], w, h, position(x, y, w, h)));
+    const empty = [];
+    for (let y = 0; y < 2; y++) {
+      for (let x = 0; x < 4; x++) {
+        const occupied = placements.some(([, left, top, w = 1, h = 1]) =>
+          left <= x && x < left + w && top <= y && y < top + h);
+        if (!occupied) empty.push(tile(null, 1, 1, position(x, y, 1, 1)));
+      }
+    }
+    return '<div class="device-grid">' + filled.join('') + empty.join('') + '</div>';
+  }
+
+  function screen(theme, scene, power, synced, title, state, reason = failureReason, layout = 'compact') {
+    const body = scene === 'failure'
+      ? '<div class="message failure"><div class="message-title">' + icon('attention', 16, '失败') +
+        '连接失败</div><div class="reason">' + escapeText(reason) + '</div></div>'
+      : scene === 'waiting' || scene === 'unsynced'
+        ? '<div class="message">' + (scene === 'waiting' ? '等待连接' : '等待同步') + '</div>'
+        : gridMarkup(layout, { ...examples, task: taskCard(state, title) });
+    return '<div class="device" data-theme="' + theme + '" aria-label="320 × 170 设备屏">' +
+      body + status(scene, power, synced) + '</div>';
+  }
+
+  function measureMarquees(root, still = false) {
+    root.querySelectorAll('.line').forEach((line) => {
+      const track = line.firstElementChild;
+      const content = track.firstElementChild;
+      const distance = content.getBoundingClientRect().width;
+      track.getAnimations().forEach((animation) => animation.cancel());
+      track.querySelector('.duplicate')?.remove();
+      track.style.transform = '';
+      line.classList.remove('overflowing', 'holding');
+      if (distance <= line.clientWidth) return;
+      line.classList.add('overflowing');
+      if (still) {
+        if (still === 'moving') track.style.transform = 'translateX(-12px)';
+        else line.classList.add('holding');
+        return;
+      }
+      const duplicate = content.cloneNode(true);
+      duplicate.classList.add('duplicate');
+      duplicate.setAttribute('aria-hidden', 'true');
+      track.append(duplicate);
+      line.classList.add('holding');
+      const travel = distance + 18;
+      const animation = track.animate(
+        [{ transform: 'translateX(0)' }, { transform: 'translateX(-' + travel + 'px)' }],
+        { delay: 800, duration: travel * 1000 / 32, iterations: Infinity },
+      );
+      setTimeout(() => {
+        if (animation.playState === 'running') line.classList.remove('holding');
+      }, 800);
+    });
+  }
+
+  function scrollFailureReason() {
+    cancelAnimationFrame(reasonAnimation);
+    const viewport = preview.querySelector('.reason');
+    if (!viewport) return;
+    const distance = viewport.scrollHeight - viewport.clientHeight;
+    viewport.scrollTop = 0;
+    viewport.classList.toggle('is-scrolling', distance > 0);
+    viewport.classList.remove('has-above');
+    viewport.classList.toggle('has-below', distance > 0);
+    if (distance <= 0) return;
+    const hold = 800;
+    const travel = distance * 1000 / 20;
+    const start = performance.now();
+    function frame(now) {
+      const phase = (now - start) % (2 * (hold + travel));
+      const position = Math.max(0, Math.min(phase - hold, travel, 2 * (hold + travel) - phase));
+      viewport.scrollTop = distance * position / travel;
+      viewport.classList.toggle('has-above', viewport.scrollTop > 0);
+      viewport.classList.toggle('has-below', viewport.scrollTop < distance);
+      reasonAnimation = requestAnimationFrame(frame);
+    }
+    reasonAnimation = requestAnimationFrame(frame);
+  }
+
+  function getTitle() {
+    return fields.taskTitle.value.trim().replace(/\s+/g, ' ') || '未命名对话';
+  }
+
+  function alertTextColor(state) {
+    if (state.alertInk === 'custom') return state.customInk;
+    const values = state.color.slice(1).match(/../g).map((hex) => parseInt(hex, 16) / 255);
+    const linear = values.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    const luminance = linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+    return luminance > 0.179 ? '#000000' : '#ffffff';
+  }
+
+  function ease(progress) {
+    const clamped = Math.min(1, Math.max(0, progress));
+    return (1 - Math.cos(Math.PI * clamped)) / 2;
+  }
+
+  function alertFrame(elapsed) {
+    const cycle = 1000;
+    const rise = 420;
+    const inkDelay = 120;
+    const phase = elapsed % cycle;
+    const entering = phase < rise;
+    const segmentTime = entering ? phase : phase - rise;
+    const segmentLength = entering ? rise : cycle - rise;
+    const background = ease(segmentTime / segmentLength);
+    const ink = ease((segmentTime - inkDelay) / (segmentLength - inkDelay));
+    return {
+      alertMix: 100 * (entering ? background : 1 - background),
+      inkMix: 100 * (entering ? ink : 1 - ink),
+    };
+  }
+
+  function styleTask() {
+    const tile = preview.querySelector('[data-type="state"]');
+    if (!tile) return;
+    const state = stateSettings[currentState];
+    tile.querySelector('.label .line-content').textContent = tasks[currentState].label;
+    tile.style.setProperty('--state', state.color);
+    tile.style.setProperty('--alert-ink', alertTextColor(state));
+  }
+
+  function styleTheme() {
+    const theme = fields.theme.value;
+    const device = preview.firstElementChild;
+    device.dataset.theme = theme;
+    Object.entries(themeColors[theme]).forEach(([name, value]) => device.style.setProperty('--' + name, value));
+  }
+
+  function renderPreview() {
+    cancelAnimationFrame(alertAnimation);
+    document.getElementById('reason-field').hidden = fields.scene.value !== 'failure';
+    preview.innerHTML = screen(fields.theme.value, fields.scene.value, fields.power.value,
+      fields.sync.value === 'yes', getTitle(), currentState, fields.failureReason.value.trim() || '—', fields.layout.value);
+    styleTheme();
+    styleTask();
+    measureMarquees(preview);
+    scrollFailureReason();
+  }
+
+  function loadThemeFields() {
+    Object.entries(themeColors[fields.theme.value]).forEach(([name, value]) => { fields[name].value = value; });
+    styleTheme();
+  }
+
+  function loadStateFields() {
+    const state = stateSettings[fields.taskState.value];
+    fields.stateColor.value = state.color;
+    fields.seconds.value = state.seconds;
+    fields.alertInk.value = state.alertInk;
+    fields.customInk.value = state.customInk;
+    document.getElementById('custom-ink').hidden = state.alertInk !== 'custom';
+  }
+
+  form.addEventListener('input', (event) => {
+    const name = event.target.name;
+    if (name === 'theme') {
+      loadThemeFields();
+    } else if (name in themeColors[fields.theme.value]) {
+      themeColors[fields.theme.value][name] = event.target.value;
+      styleTheme();
+    } else if (['scene', 'power', 'sync', 'failureReason', 'layout'].includes(name)) {
+      renderPreview();
+    } else if (name === 'taskState') {
+      loadStateFields();
+    } else if (name === 'taskTitle') {
+      const tile = preview.querySelector('[data-type="state"]');
+      if (tile) {
+        tile.querySelector('.reading .line-content').textContent = getTitle();
+        measureMarquees(tile);
+      }
+    } else {
+      const state = stateSettings[fields.taskState.value];
+      state.color = fields.stateColor.value;
+      state.alertInk = fields.alertInk.value;
+      state.customInk = fields.customInk.value;
+      if (fields.seconds.validity.valid) state.seconds = Number(fields.seconds.value);
+      document.getElementById('custom-ink').hidden = state.alertInk !== 'custom';
+      styleTask();
+    }
+  });
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    cancelAnimationFrame(alertAnimation);
+    currentState = fields.taskState.value;
+    if (!preview.querySelector('[data-type="state"]')) {
+      fields.scene.value = 'online';
+      renderPreview();
+    }
+    styleTask();
+    const tile = preview.querySelector('[data-type="state"]');
+    const duration = stateSettings[currentState].seconds * 1000;
+    const start = performance.now();
+    function frame(now) {
+      const elapsed = Math.max(now - start, 0);
+      const { alertMix, inkMix } = alertFrame(elapsed < duration ? elapsed : 0);
+      tile.style.setProperty('--alert-mix', alertMix + '%');
+      tile.style.setProperty('--ink-mix', inkMix + '%');
+      if (elapsed < duration) alertAnimation = requestAnimationFrame(frame);
+    }
+    frame(start);
+  });
+
+  const spanFrames = document.getElementById('span-frames');
+  spanFrames.innerHTML = [
+    ['1 × 2 · 双列', '154 × 64', 'wide', 'dark'],
+    ['2 × 2 · 进度', '154 × 132', 'tall', 'dark'],
+    ['1 × 4 · 通栏', '312 × 64', 'full', 'light'],
+    ['2 × 2 · 状态', '154 × 132', 'tallState', 'light'],
+  ].map(([label, size, layout, theme]) =>
+    '<figure><figcaption><h3>' + label + '</h3><span class="frame-index">' + size + '</span></figcaption>' +
+    screen(theme, 'online', 'external', true, titleSample, 'running', failureReason, layout) + '</figure>',
+  ).join('');
+
+  const frames = document.getElementById('frames');
+  frames.innerHTML = [
+    ['深色 · 正常显示', 'dark', 'online', 'external', true],
+    ['明亮 · 电池供电', 'light', 'online', '67', true],
+    ['首次等待连接', 'dark', 'waiting', 'external', false],
+    ['连接失败 · 长原因', 'dark', 'failure', '12', false],
+  ].map(([label, theme, scene, power, synced], index) =>
+    '<figure><figcaption><span class="frame-index">0' + (index + 1) + '</span><h3>' + label +
+    '</h3></figcaption>' + screen(theme, scene, power, synced, titleSample, 'running') + '</figure>',
+  ).join('');
+
+  const phases = document.getElementById('phases');
+  phases.innerHTML = [
+    ['切换前', 'running', 0], ['渐入中', 'completed', 210], ['提醒最强', 'completed', 420],
+    ['渐出中', 'completed', 710], ['提醒结束', 'completed', 0],
+  ].map(([label, state, elapsed]) =>
+    '<figure><figcaption>' + label + '</figcaption>' +
+    tile(taskCard(state, titleSample, elapsed)) + '</figure>',
+  ).join('');
+
+  function iconKey(label, markup) {
+    return '<div class="icon-key"><span class="icon-sample power" aria-hidden="true">' + markup +
+      '</span><span>' + label + '</span></div>';
+  }
+
+  const iconGroups = [
+    Object.values(connections).map((entry) => iconKey(entry.label, icon(entry.icon, 14, entry.label))),
+    [['外部供电', 'external'], ['低电量', '12'], ['电池供电', '67'], ['满电', '100'], ['电量未知', 'unknown'],
+      ['充电中', 'charging'], ['供电未知', 'unavailable']].map(([label, power]) => iconKey(label, powerStatus(power))),
+    Object.values(tasks).map((task) => iconKey(task.label, icon(task.icon, 16, task.label))),
+  ];
+  document.getElementById('icon-keys').innerHTML = iconGroups.map((group) =>
+    '<div class="icon-key-group">' + group.join('') + '</div>',
+  ).join('');
+
+  renderPreview();
+  document.fonts.ready.then(() => {
+    measureMarquees(preview);
+    scrollFailureReason();
+    measureMarquees(spanFrames, 'start');
+    measureMarquees(frames, 'start');
+    measureMarquees(phases, 'moving');
+  });
+</script>
+</body>
+</html>
