@@ -1,15 +1,12 @@
 mod metrics;
 mod rpc;
 
-use crate::{
-    device::{Device, TaskReading, WidgetValue},
-    SNAPSHOT_EVENT,
-};
+use crate::{collector::builtin::publish_codex, device::TaskReading};
 use metrics::{AccountLimits, RolloutCache, Speed};
 use rpc::Failure;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
-    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::{mpsc, Arc, Mutex},
@@ -336,35 +333,18 @@ impl Worker {
         if let Ok(mut status) = self.shared.lock() {
             *status = self.status.clone();
         }
-        let _ = self.app.emit_to("main", STATUS_EVENT, &self.status);
+        for window in ["main", "collectors"] {
+            let _ = self.app.emit_to(window, STATUS_EVENT, &self.status);
+        }
 
-        let mut values = BTreeMap::new();
-        if let Some(window) = self.status.limits.limiting_window() {
-            values.insert(
-                "quota".into(),
-                WidgetValue::Number(window.remaining_percent),
-            );
-            if let Some(resets_at) = window.resets_at {
-                values.insert("quota-reset".into(), WidgetValue::Number(resets_at));
-            }
-        }
-        if let Some(count) = self.status.limits.reset_count {
-            values.insert("resets".into(), WidgetValue::Number(count));
-        }
-        if let Some(speed) = &self.status.speed {
-            values.insert("speed".into(), WidgetValue::Number(speed.tokens_per_second));
-        }
-        if let Some(task) = &self.task {
-            values.insert("task".into(), WidgetValue::Task(task.clone()));
-        }
-        let device = self.app.state::<Mutex<Device>>();
-        let snapshot = device
-            .lock()
-            .ok()
-            .and_then(|mut device| device.update_values(values));
-        if let Some(snapshot) = snapshot {
-            let _ = self.app.emit(SNAPSHOT_EVENT, snapshot);
-        }
+        publish_codex(
+            &self.app,
+            json!({
+                "limits": self.status.limits,
+                "speed": self.status.speed.as_ref().map(|speed| speed.tokens_per_second),
+                "task": self.task,
+            }),
+        );
     }
 }
 

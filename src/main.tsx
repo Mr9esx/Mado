@@ -1,37 +1,23 @@
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { isTauri } from '@tauri-apps/api/core'
-import { X } from 'lucide-react'
-import { StrictMode } from 'react'
+import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
+import { AppearanceProvider } from './appearance'
 import { Editor } from './Editor'
-import { Screen } from './Screen'
-import { useDevice } from './device'
+import { DesktopWidget } from './DesktopWidget'
 import './styles.css'
 
-function VirtualDisplay() {
-  const { snapshot } = useDevice()
-  const displayWindow = getCurrentWebviewWindow()
-
-  return (
-    <main className="virtual-window" aria-label="虚拟显示屏" onPointerDown={(event) => {
-      if (event.button === 0 && event.target instanceof Element && !event.target.closest('button')) {
-        void displayWindow.startDragging().catch(console.error)
-      }
-    }}>
-      <Screen layout={snapshot?.layout ?? []} snapshot={snapshot} />
-      <button type="button" className="virtual-window-close" aria-label="关闭虚拟屏" title="关闭虚拟屏"
-        onClick={() => void displayWindow.close().catch(console.error)}>
-        <X size={14} />
-      </button>
-    </main>
-  )
-}
-
-const screenWindow = isTauri() && getCurrentWebviewWindow().label === 'display'
+const CollectorWorkspace = lazy(() => import('./CollectorWorkspace').then(module => ({ default: module.CollectorWorkspace })))
+const windowLabel = isTauri() ? getCurrentWebviewWindow().label : undefined
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>
+  <StrictMode><AppearanceProvider>
     {isTauri()
-      ? screenWindow ? <VirtualDisplay /> : <Editor />
+      ? windowLabel === 'display' ? <DesktopWidget /> : windowLabel === 'collectors'
+        ? <Suspense fallback={<main className="studio">
+          <div className="window-grip" data-tauri-drag-region aria-hidden="true" />
+          <p className="launch-help" role="status">正在打开采集器工作区…</p>
+        </main>}><CollectorWorkspace /></Suspense>
+        : <Editor />
       : <main className="launch-help"><p>请通过 <code>npm run tauri dev</code> 打开桌面 App。</p></main>}
-  </StrictMode>,
+  </AppearanceProvider></StrictMode>,
 )

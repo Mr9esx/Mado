@@ -1,6 +1,6 @@
 use crate::device::{TaskReading, TaskState};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -15,17 +15,16 @@ const RECENT_LOGS: usize = 16;
 const LOG_TAIL_BYTES: u64 = 2 * 1024 * 1024;
 const RECENT_SAMPLES: usize = 10;
 const LOOKBACK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-const ACTIVE_WINDOW: Duration = Duration::from_secs(180);
 const LOG_HEADER_BYTES: u64 = 256 * 1024;
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct AccountLimits {
     pub windows: Vec<QuotaWindow>,
     pub reset_count: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct QuotaWindow {
     pub duration_minutes: Option<u64>,
@@ -33,41 +32,7 @@ pub(super) struct QuotaWindow {
     pub resets_at: Option<u64>,
 }
 
-impl AccountLimits {
-    pub fn limiting_window(&self) -> Option<&QuotaWindow> {
-        self.windows
-            .iter()
-            .min_by_key(|window| window.remaining_percent)
-    }
-}
-
-pub(super) fn parse_limits(response: &Value) -> AccountLimits {
-    let main = response
-        .pointer("/rateLimitsByLimitId/codex")
-        .filter(|bucket| bucket.is_object())
-        .or_else(|| response.get("rateLimits"));
-    let mut windows: Vec<_> = ["primary", "secondary"]
-        .into_iter()
-        .filter_map(|key| {
-            let window = main?.get(key)?;
-            let used = window.get("usedPercent")?.as_f64()?;
-            Some(QuotaWindow {
-                duration_minutes: window.get("windowDurationMins").and_then(Value::as_u64),
-                remaining_percent: (100.0 - used).clamp(0.0, 100.0).round() as u64,
-                resets_at: window.get("resetsAt").and_then(Value::as_u64),
-            })
-        })
-        .collect();
-    windows.sort_by_key(|window| window.duration_minutes.unwrap_or(u64::MAX));
-    AccountLimits {
-        windows,
-        reset_count: response
-            .pointer("/rateLimitResetCredits/availableCount")
-            .and_then(Value::as_u64),
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Speed {
     pub tokens_per_second: u64,
@@ -75,7 +40,8 @@ pub(super) struct Speed {
     pub latest_at: i64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Sample {
     tokens: u64,
     duration_ms: i64,
@@ -156,40 +122,40 @@ impl RolloutCache {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
-        let mut samples: Vec<_> = self
+        let samples: Vec<_> = self
             .files
             .values()
             .flat_map(|file| &file.readings.samples)
             .filter(|sample| sample.ended_ms >= cutoff_ms)
-            .cloned()
             .collect();
-        let task = self
+        let micros = |time: SystemTime| {
+            time.duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64
+        };
+        let turns: Vec<_> = self
             .files
             .values()
             .filter_map(|file| {
                 let id = file.thread_id.as_deref()?;
                 let turn = file.readings.turn.as_ref()?;
-                let mut state = turn.state;
-                if state == TaskState::Running
-                    && now.duration_since(file.modified).unwrap_or_default() > ACTIVE_WINDOW
-                {
-                    state = TaskState::Unknown;
-                }
-                let sort_time = if state == TaskState::Running {
-                    turn.started_at.unwrap_or(file.modified)
-                } else {
-                    file.modified
-                };
-                Some((id, sort_time, state))
+                Some(
+                    json!({ "id": id, "state": turn.state, "modified": micros(file.modified),
+                "started": turn.started_at.map(micros) }),
+                )
             })
-            .max_by_key(|(id, time, state)| (*state == TaskState::Running, *time, *id))
-            .map(|(id, _, state)| TaskReading {
-                state,
-                title: read_thread_title(codex_home, id),
-            });
+            .collect();
+        let Ok(summary) =
+            summarize(json!({ "samples": samples, "turns": turns, "nowMicros": micros(now) }))
+        else {
+            return LocalReadings::default();
+        };
         LocalReadings {
-            speed: average_speed(&mut samples),
-            task,
+            speed: summary.speed,
+            task: summary.task.map(|task| TaskReading {
+                state: task.state,
+                title: read_thread_title(codex_home, &task.id),
+            }),
         }
     }
 }
@@ -205,11 +171,20 @@ fn read_rollout(path: &Path, modified: SystemTime, size: u64) -> io::Result<Cach
     if offset > 0 {
         reader.read_until(b'\n', &mut Vec::new())?;
     }
+    let mut readings = parse_rollout(reader);
+    // Each file contributes at most the ten newest distinct candidates to the merge.
+    readings.samples.sort_unstable_by_key(|sample| {
+        std::cmp::Reverse((sample.ended_ms, sample.duration_ms, sample.tokens))
+    });
+    readings
+        .samples
+        .dedup_by_key(|sample| (sample.ended_ms, sample.duration_ms, sample.tokens));
+    readings.samples.truncate(RECENT_SAMPLES);
     Ok(CachedRollout {
         modified,
         size,
         thread_id,
-        readings: parse_rollout(reader),
+        readings,
     })
 }
 
@@ -422,22 +397,21 @@ fn parse_rollout(reader: impl BufRead) -> RolloutReadings {
     readings
 }
 
-fn average_speed(samples: &mut Vec<Sample>) -> Option<Speed> {
-    samples.sort_unstable_by_key(|sample| {
-        std::cmp::Reverse((sample.ended_ms, sample.duration_ms, sample.tokens))
-    });
-    samples.dedup_by_key(|sample| (sample.ended_ms, sample.duration_ms, sample.tokens));
-    let samples = &samples[..samples.len().min(RECENT_SAMPLES)];
-    let latest_at = samples.first()?.ended_ms / 1000;
-    let tokens: f64 = samples.iter().map(|sample| sample.tokens as f64).sum();
-    let seconds: f64 = samples
-        .iter()
-        .map(|sample| sample.duration_ms as f64 / 1000.0)
-        .sum();
-    Some(Speed {
-        tokens_per_second: (tokens / seconds).round() as u64,
-        samples: samples.len(),
-        latest_at,
+#[derive(Deserialize)]
+struct SelectedTurn {
+    id: String,
+    state: TaskState,
+}
+
+#[derive(Deserialize)]
+struct RolloutSummary {
+    speed: Option<Speed>,
+    task: Option<SelectedTurn>,
+}
+
+fn summarize(data: Value) -> Result<RolloutSummary, String> {
+    crate::collector::builtin::codex_export("summarizeRollouts", data, |_| {
+        Err("会话汇总只使用提供的采样。".into())
     })
 }
 

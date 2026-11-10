@@ -1,17 +1,22 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useEffect, useState } from 'react'
-import type { LayoutItem, Snapshot } from './layout'
+import type { DisplayPage, LayoutItem, Snapshot } from './layout'
 
 export const getSnapshot = () => invoke<Snapshot>('get_snapshot')
 export const syncLayout = (layout: LayoutItem[], baseRevision: number) =>
   invoke<Snapshot>('sync_layout', { layout, baseRevision })
-export const openDisplay = () => invoke<void>('open_display')
+export const applyPages = (pages: DisplayPage[], rotationSeconds: number, baseRevision: number) =>
+  invoke<Snapshot>('apply_pages', { pages, rotationSeconds, baseRevision })
+export const selectPage = (id: string) => invoke<Snapshot>('select_page', { id })
+export const openDesktopWidget = () => invoke<void>('open_desktop_widget')
 
 export function useDevice() {
   const [snapshot, setSnapshot] = useState<Snapshot>()
+  const [error, setError] = useState('')
 
   function receive(next: Snapshot) {
+    setError('')
     setSnapshot((current) => current && current.sequence > next.sequence ? current : next)
   }
 
@@ -32,7 +37,7 @@ export function useDevice() {
         const initial = await getSnapshot()
         if (active) receive(initial)
       } catch (reason) {
-        if (active) console.error(reason)
+        if (active) setError(String(reason))
       }
     }
 
@@ -43,5 +48,5 @@ export function useDevice() {
     }
   }, [])
 
-  return { snapshot, receive }
+  return { snapshot, receive, error }
 }

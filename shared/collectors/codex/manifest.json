@@ -1,0 +1,33 @@
+{
+  "moduleId": "codex",
+  "name": "Codex",
+  "sdkApiVersion": 2,
+  "entry": "index.mjs",
+  "settings": {
+    "mode": { "label": "采集模式", "default": "account" }
+  },
+  "permissions": {
+    "appServer": {
+      "kind": "stdio", "label": "Codex App Server",
+      "args": ["app-server", "--listen", "stdio://"],
+      "methods": ["account/read", "account/rateLimits/read"]
+    }
+  },
+  "outputs": {
+    "quota": { "valueType": "progress", "unit": "%" },
+    "speed": { "valueType": "number", "unit": "tok/s" },
+    "resets": { "valueType": "number", "unit": "张" },
+    "quotaReset": { "valueType": "deadline" },
+    "task": { "valueType": "state", "stateKeys": ["running", "completed", "interrupted", "error", "unknown"] }
+  },
+  "widgets": {
+    "quota": { "outputKey": "quota", "kind": "progress", "label": "剩余额度", "shortLabel": "额度", "supportedSpans": [{ "w": 1, "h": 1 }] },
+    "speed": { "outputKey": "speed", "kind": "metric", "label": "响应速度", "shortLabel": "速度", "supportedSpans": [{ "w": 1, "h": 1 }] },
+    "resets": { "outputKey": "resets", "kind": "metric", "label": "重置卡", "supportedSpans": [{ "w": 1, "h": 1 }] },
+    "quota-reset": { "outputKey": "quotaReset", "kind": "metric", "format": "countdown", "label": "额度恢复倒计时", "shortLabel": "额度恢复", "supportedSpans": [{ "w": 1, "h": 1 }] },
+    "task": {
+      "outputKey": "task", "kind": "state", "label": "任务状态", "supportedSpans": [{ "w": 1, "h": 1 }],
+      "stateLabels": { "running": "运行中", "completed": "已完成", "interrupted": "已中断", "error": "运行异常", "unknown": "状态未知" }
+    }
+  }
+}

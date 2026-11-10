@@ -21,16 +21,7 @@
         "center": true,
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
-        "theme": "Light",
-        "transparent": true,
-        "windowEffects": {
-          "effects": [
-            "fullScreenUI",
-            "acrylic"
-          ],
-          "state": "active",
-          "color": "#f5f5f5aa"
-        }
+        "transparent": false
       }
     ],
     "security": {
@@ -46,7 +37,8 @@
     ],
     "resources": [
       "licenses/reui.txt",
-      "licenses/maple-mono.txt"
+      "licenses/maple-mono.txt",
+      "licenses/iconpark.txt"
     ]
   }
 }

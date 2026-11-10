@@ -1,12 +1,15 @@
-import { Check, CircleAlert, Monitor, Plus, RefreshCw, Settings2 } from 'lucide-react'
+import { Check, ChevronDown, CircleAlert, Monitor, Plus, RefreshCw, Settings2, Terminal } from 'lucide-react'
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { Button } from '@/components/ui/button'
-import { openDisplay, syncLayout, useDevice } from './device'
-import { canPlace, cellAt, cellHeight, cellWidth, display, firstOpenCell, sameLayout, type LayoutItem } from './layout'
+import { openDesktopWidget, applyPages, useDevice } from './device'
+import { canPlace, cellAt, cellHeight, cellWidth, display, firstOpenCell, sameLayout, widgetCatalog, type DisplayPage, type LayoutItem, type Widget } from './layout'
+import { PageManager } from './PageManager'
+import { pageError, pagesFromSnapshot, samePages } from './pages'
 import { Screen } from './Screen'
 import { WidgetReading } from './WidgetReading'
 import { codexLabel, useCodexStatus } from './codex'
-import { CodexSettings } from './CodexSettings'
+import { AppSettings } from './AppSettings'
+import { openCollectors } from './collectorApi'
 
 type Drag = {
   pointer: number
@@ -31,24 +34,55 @@ const arrowOffsets: Record<string, [number, number]> = {
 export function Editor() {
   const { snapshot, receive } = useDevice()
   const { status: codexStatus, error: sourceError } = useCodexStatus()
-  const [showSettings, setShowSettings] = useState(false)
-  const [draft, setDraft] = useState<LayoutItem[] | null>(null)
+  const [showSettings, setShowSettings] = useState<'appearance' | 'source' | null>(null)
+  const [collapsedGroups, setCollapsedGroups] = useState(() => new Set<string>())
+  const [draft, setDraft] = useState<{ pages: DisplayPage[]; rotationSeconds: number; baseRevision: number } | null>(null)
+  const [selectedPageId, setSelectedPageId] = useState('')
   const [selectedId, select] = useState('')
   const [target, setTarget] = useState<{ item: LayoutItem; valid: boolean }>()
   const [draggingId, setDraggingId] = useState<string>()
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState('')
   const [displayError, setDisplayError] = useState('')
+  const [collectorError, setCollectorError] = useState('')
   const grid = useRef<HTMLDivElement>(null)
   const drag = useRef<Drag | null>(null)
-  const layout = draft ?? snapshot?.layout ?? display.initialLayout
+  const pages = draft?.pages ?? pagesFromSnapshot(snapshot)
+  const currentPage = pages.find(page => page.id === selectedPageId) ?? pages[0]
+  const rotationSeconds = draft?.rotationSeconds ?? snapshot?.rotationSeconds ?? 0
+  const layout = currentPage.layout
+  const catalog = widgetCatalog(snapshot)
+  const groups = new Map<string, Widget[]>()
+  for (const widget of catalog.values()) {
+    const group = groups.get(widget.group)
+    if (group) group.push(widget)
+    else groups.set(widget.group, [widget])
+  }
   const occupied = layout.reduce((count, item) => count + item.w * item.h, 0)
-  const dirty = snapshot ? !sameLayout(layout, snapshot.layout) : false
+  const resolved = [...new Set(pages.flatMap(page => page.layout.map(item => item.id)))].flatMap(id => catalog.get(id) ?? [])
+  const dirty = snapshot ? snapshot.lastSyncedAt == null || !samePages(pages, pagesFromSnapshot(snapshot))
+    || rotationSeconds !== (snapshot.rotationSeconds ?? 0)
+    || (snapshot.appliedWidgets !== undefined && JSON.stringify(resolved) !== JSON.stringify(snapshot.appliedWidgets)) : false
+  const validationError = pageError(pages)
+  function editPages(next: DisplayPage[], selection?: string, rotation = rotationSeconds) {
+    if (syncing || !snapshot) return
+    setDraft({ pages: next, rotationSeconds: rotation, baseRevision: draft?.baseRevision ?? snapshot.revision })
+    if (selection) { setSelectedPageId(selection); select('') }
+    setSyncError('')
+  }
   const SyncIcon = syncError ? CircleAlert : RefreshCw
   const DisplayIcon = displayError ? CircleAlert : Monitor
 
+  function toggleGroup(id: string) {
+    setCollapsedGroups(current => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  }
+
   function applyEdit(next: LayoutItem[], selection: string) {
-    if (!sameLayout(layout, next)) setDraft(next)
+    if (!sameLayout(layout, next)) editPages(pages.map(page => page.id === currentPage.id ? { ...page, layout: next } : page))
     select(selection)
   }
 
@@ -57,7 +91,7 @@ export function Editor() {
   }
 
   function place(item: LayoutItem) {
-    if (!canPlace(layout, item)) return
+    if (!canPlace(layout, item, catalog)) return
     applyEdit(layout.some((entry) => entry.id === item.id)
       ? layout.map((entry) => entry.id === item.id ? item : entry)
       : [...layout, item], item.id)
@@ -68,12 +102,12 @@ export function Editor() {
       select(id)
       return
     }
-    const item = firstOpenCell(layout, id)
+    const item = firstOpenCell(layout, id, catalog)
     if (item) place(item)
   }
 
   function beginDrag(event: PointerEvent<HTMLButtonElement>, item: LayoutItem, fromLibrary = false) {
-    if (event.button !== 0 || drag.current) return
+    if (syncing || event.button !== 0 || drag.current) return
     const cell = !fromLibrary && grid.current
       ? cellAt(grid.current.getBoundingClientRect(), event.clientX, event.clientY)
       : null
@@ -103,7 +137,7 @@ export function Editor() {
     active.moved = true
     setDraggingId(active.item.id)
     const item = proposedItem(event, active)
-    setTarget(item && { item, valid: canPlace(layout, item) })
+    setTarget(item && { item, valid: canPlace(layout, item, catalog) })
   }
 
   function clearDrag() {
@@ -143,9 +177,10 @@ export function Editor() {
     setSyncing(true)
     setSyncError('')
     try {
-      receive(await syncLayout(layout, snapshot.revision))
+      receive(await applyPages(pages, rotationSeconds, draft?.baseRevision ?? snapshot.revision))
+      setDraft(null)
     } catch (reason) {
-      setSyncError(`同步失败。${String(reason)}`)
+      setSyncError(`应用布局失败。${String(reason)}`)
     } finally {
       setSyncing(false)
     }
@@ -154,79 +189,99 @@ export function Editor() {
   async function showDisplay() {
     setDisplayError('')
     try {
-      await openDisplay()
+      await openDesktopWidget()
     } catch (reason) {
-      setDisplayError(`无法打开虚拟屏。${String(reason)}`)
+      setDisplayError(`无法打开桌面控件。${String(reason)}`)
     }
   }
 
   return (
-    <main className="studio" aria-label="布局编辑器" onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={clearDrag} onLostPointerCapture={clearDrag}
+    <main className="studio studio-editor" aria-label="布局编辑器" onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={clearDrag} onLostPointerCapture={clearDrag}
       onKeyDown={(event) => {
         if (!showSettings && event.key === 'Escape') {
           clearDrag()
           select('')
         }
       }}>
-      <div className="window-grip" data-tauri-drag-region aria-hidden="true" />
+      <header className="studio-titlebar">
+        <div className="window-grip" data-tauri-drag-region aria-hidden="true" />
+        <div className="studio-tools" role="group" aria-label="Studio 工具">
+          <Button size="sm" variant="ghost" title={collectorError || undefined} onClick={() => {
+            setCollectorError('')
+            void openCollectors().catch(reason => setCollectorError(String(reason)))
+          }}>
+            {collectorError ? <CircleAlert size={15} /> : <Terminal size={15} />}采集器
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setShowSettings('appearance')}>
+            <Settings2 size={15} />设置
+          </Button>
+        </div>
+      </header>
       <div className="studio-canvas" style={editorGeometry}>
-        <aside className="component-tools" aria-label="组件选择和操作">
+        <aside className="component-tools" aria-label="组件库">
           <div className="library-heading">
             <h2>组件</h2>
-            <Button size="sm" variant="ghost" className="settings-button" onClick={() => setShowSettings(true)}>
-              <Settings2 size={16} />设置
-            </Button>
           </div>
           <div className="library-scroll">
-            {display.groups.map((group) => (
-              <section key={group.id} className="component-group" aria-label={group.name}>
-                <div className="component-group-heading">
-                  <h3>{group.name}</h3>
-                  {group.id === 'codex' && (
-                    <button type="button" className={`source-badge${codexStatus?.phase === 'connected' ? ' is-connected' : ''}`}
-                      aria-label={`Codex 数据源设置，${codexLabel(codexStatus)}`}
-                      onClick={() => setShowSettings(true)}>
-                      {codexStatus?.phase === 'disabled' ? '连接' : <><i aria-hidden="true" />{codexLabel(codexStatus)}</>}
-                    </button>
-                  )}
-                </div>
-                <div className="component-list">
-                  {display.widgets.filter((definition) => definition.group === group.id).map((definition) => {
-                    const placed = layout.find((item) => item.id === definition.id)
-                    const [defaultWidth, defaultHeight] = definition.sizes[0]
-                    const item = placed ?? { id: definition.id, x: 0, y: 0, w: defaultWidth, h: defaultHeight }
-                    const size = `${item.w} × ${item.h}`
-                    return (
-                      <button
-                        key={definition.id}
-                        className={`library-card${selectedId === definition.id ? ' is-current' : ''}`}
-                        type="button"
-                        aria-label={`${placed ? '选择' : '添加'}${definition.name}，${size}`}
-                        aria-pressed={selectedId === definition.id}
-                        title={placed ? `拖动或选择${definition.name}` : `拖动或添加${definition.name}`}
-                        onClick={(event) => { if (event.detail === 0) add(definition.id) }}
-                        onPointerDown={(event) => beginDrag(event, item, true)}
-                      >
-                        <span className="library-thumbnail" aria-hidden="true">
-                          <span className="library-thumbnail-viewport" style={thumbnailViewport}>
-                            <span className="screen-widget is-narrow library-thumbnail-card" style={thumbnailCard}>
-                              <WidgetReading widget={definition} width={1} value={snapshot?.values[definition.id]} />
+            {Array.from(groups, ([groupId, definitions]) => {
+              const groupName = definitions[0].groupName || (groupId === 'codex' ? 'Codex' : groupId)
+              const expanded = !collapsedGroups.has(groupId)
+              const listId = `component-list-${groupId}`
+              return (
+                <section key={groupId} className="component-group" aria-label={groupName}>
+                  <div className="component-group-heading">
+                    <h3>
+                      <Button size="sm" variant="ghost" type="button" className="component-group-toggle" aria-expanded={expanded}
+                        aria-controls={listId} onClick={() => toggleGroup(groupId)}>
+                        <ChevronDown size={14} aria-hidden="true" />
+                        <span>{groupName}</span>
+                      </Button>
+                    </h3>
+                    {groupId === 'codex' && (
+                      <Button size="xs" variant="ghost" type="button" className={`source-badge${codexStatus?.phase === 'connected' ? ' is-connected' : ''}`}
+                        aria-label={`Codex 数据源设置，${codexLabel(codexStatus)}`}
+                        onClick={() => setShowSettings('source')}>
+                        {codexStatus?.phase === 'disabled' ? '连接' : <><i aria-hidden="true" />{codexLabel(codexStatus)}</>}
+                      </Button>
+                    )}
+                  </div>
+                  <div className="component-list" id={listId} hidden={!expanded}>
+                    {definitions.map((definition) => {
+                      const placed = layout.find((item) => item.id === definition.id)
+                      const [defaultWidth, defaultHeight] = definition.sizes[0]
+                      const item = placed ?? { id: definition.id, x: 0, y: 0, w: defaultWidth, h: defaultHeight }
+                      const size = `${item.w} × ${item.h}`
+                      return (
+                        <Button size="sm" variant="outline"
+                          key={definition.id}
+                          className={`library-card${selectedId === definition.id ? ' is-current' : ''}`}
+                          type="button"
+                          aria-label={`${placed ? '选择' : '添加'}${definition.name}，${size}`}
+                          aria-pressed={selectedId === definition.id}
+                          title={placed ? `拖动或选择${definition.name}` : `拖动或添加${definition.name}`}
+                          onClick={(event) => { if (event.detail === 0) add(definition.id) }}
+                          onPointerDown={(event) => beginDrag(event, item, true)}
+                        >
+                          <span className="library-thumbnail" aria-hidden="true">
+                            <span className="library-thumbnail-viewport" style={thumbnailViewport}>
+                              <span className="screen-widget is-narrow library-thumbnail-card" style={thumbnailCard}>
+                                <WidgetReading widget={definition} width={1} value={snapshot?.values[definition.id]} />
+                              </span>
                             </span>
                           </span>
-                        </span>
-                        <span className="library-card-meta" aria-hidden="true">
-                          <strong>{definition.name}</strong>
-                          <span>{size}</span>
-                        </span>
-                        {placed ? <Check className="library-card-state" size={15} aria-hidden="true" /> : <Plus className="library-card-state" size={15} aria-hidden="true" />}
-                      </button>
-                    )
-                  })}
-                </div>
-              </section>
-            ))}
+                          <span className="library-card-meta" aria-hidden="true">
+                            <strong>{definition.name}</strong>
+                            <span>{size}</span>
+                          </span>
+                          {placed ? <Check className="library-card-state" size={15} aria-hidden="true" /> : <Plus className="library-card-state" size={15} aria-hidden="true" />}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                </section>
+              )
+            })}
           </div>
-
         </aside>
 
         <section className="display-console" aria-label="屏幕预览">
@@ -234,25 +289,31 @@ export function Editor() {
             <h2>预览</h2>
             <span className="usage">{occupied} / {display.columns * display.rows} 格</span>
           </div>
-          <div className="screen-stage">
-            <Screen layout={layout} snapshot={snapshot} gridRef={grid}
-              selected={selectedId} dragging={draggingId} target={target}
-              onSelect={select} onRemove={removeCard} onCardPointerDown={beginDrag} onCardKeyDown={editWithKeys} />
+          <PageManager pages={pages} selected={currentPage.id} rotationSeconds={rotationSeconds} disabled={syncing || !snapshot}
+            onSelect={id => { setSelectedPageId(id); select(''); clearDrag() }} onChange={editPages}
+            onRotationChange={seconds => editPages(pages, undefined, seconds)} />
+          <div className="preview-panel">
+            <div className="screen-stage">
+              <Screen surface="desktop" pages={pages} pageId={currentPage.id} layout={layout} snapshot={snapshot} gridRef={grid}
+                selected={selectedId} dragging={draggingId} target={target}
+                onSelect={select} onRemove={removeCard} onCardPointerDown={beginDrag} onCardKeyDown={editWithKeys} />
+            </div>
+            <div className="display-toolbar">
+              <Button size="sm" variant="ghost" className="action-button"
+                title={displayError || undefined} onClick={showDisplay}>
+                <DisplayIcon size={16} />桌面控件
+              </Button>
+              <Button size="sm" className="action-button sync-button" disabled={!snapshot || !dirty || syncing || !!validationError}
+                title={syncError || '保存全部页面并应用到桌面控件'} onClick={synchronize}>
+                <SyncIcon size={14} className={syncing ? 'spinning' : ''} />{syncing ? '应用中' : '应用布局'}
+              </Button>
+            </div>
           </div>
-
-          <div className="display-toolbar">
-            <Button size="sm" variant="ghost" className="action-button"
-              title={displayError || undefined} onClick={showDisplay}>
-              <DisplayIcon size={16} />虚拟屏
-            </Button>
-            <Button size="sm" className="action-button sync-button" disabled={!dirty || syncing}
-              title={syncError || undefined} onClick={synchronize}>
-              <SyncIcon size={14} className={syncing ? 'spinning' : ''} />{syncing ? '同步中' : '同步'}
-            </Button>
-          </div>
+          {(syncError || validationError) && <p className="page-error" role="alert">{syncError || validationError}</p>}
+          {draft && <Button size="sm" variant="ghost" className="discard-pages" type="button" disabled={syncing} onClick={() => { setDraft(null); setSyncError('') }}>放弃未应用的修改</Button>}
         </section>
       </div>
-      {showSettings && <CodexSettings status={codexStatus} error={sourceError} onDismiss={() => setShowSettings(false)} />}
+      {showSettings && <AppSettings initialTab={showSettings} status={codexStatus} error={sourceError} onDismiss={() => setShowSettings(null)} />}
     </main>
   )
 }

@@ -1,6 +1,6 @@
-import { X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { cancelCodexLogin, codexLabel, connectCodex, loginCodex, pauseCodex, refreshCodex, type CodexStatus } from './codex'
 
@@ -24,12 +24,16 @@ function resetLabel(seconds: number | null) {
   return Number.isNaN(date.getTime()) ? null : `${resetTime.format(date)} 重置`
 }
 
-export function CodexSettings({ status, error, onDismiss }: {
-  status?: CodexStatus
-  error: string
-  onDismiss: () => void
-}) {
-  const dialog = useRef<HTMLDialogElement>(null)
+type Props = { status?: CodexStatus; error: string; onDismiss: () => void }
+export function CodexSettings({ status, error, onDismiss }: Props) {
+  return <Dialog open onOpenChange={open => { if (!open) onDismiss() }}>
+    <DialogContent className="settings-dialog" aria-describedby={undefined}>
+      <DialogTitle>数据源设置</DialogTitle>
+      <CodexSettingsPanel status={status} error={error} />
+    </DialogContent>
+  </Dialog>
+}
+export function CodexSettingsPanel({ status, error }: Omit<Props, 'onDismiss'>) {
   const [pathDraft, setPath] = useState<string>()
   const [pending, setPending] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -45,10 +49,6 @@ export function CodexSettings({ status, error, onDismiss }: {
     ? status?.cliPath ? '此路径下找不到 Codex CLI。' : '未找到 Codex CLI。'
     : status?.phase === 'needsCli' ? null : status?.message)
 
-  useEffect(() => {
-    if (dialog.current && !dialog.current.open) dialog.current.showModal()
-  }, [])
-
   async function run(action: () => Promise<void>) {
     setPending(true)
     setActionError('')
@@ -62,14 +62,7 @@ export function CodexSettings({ status, error, onDismiss }: {
   }
 
   return (
-    <dialog ref={dialog} className="source-dialog" aria-labelledby="source-settings-title"
-      onClose={onDismiss} onClick={(event) => { if (event.target === event.currentTarget) onDismiss() }}>
-      <div className="source-sheet">
-        <header className="source-sheet-header">
-          <h2 id="source-settings-title">数据源</h2>
-          <Button size="sm" mode="icon" variant="ghost" aria-label="关闭设置" onClick={onDismiss}><X className="size-5" /></Button>
-        </header>
-
+    <div className="source-settings-panel">
         <section className="source-connect" aria-labelledby="codex-source-title">
           <div className="source-heading">
             <h3 id="codex-source-title">Codex</h3>
@@ -137,7 +130,6 @@ export function CodexSettings({ status, error, onDismiss }: {
             {signingIn ? '等待登录' : checking ? '检测中…' : canRefresh ? '刷新' : needsLogin ? '浏览器登录' : '连接 Codex'}
           </Button>
         </footer>
-      </div>
-    </dialog>
+    </div>
   )
 }

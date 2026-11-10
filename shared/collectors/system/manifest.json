@@ -1,0 +1,39 @@
+{
+  "moduleId": "system",
+  "name": "系统状态",
+  "sdkApiVersion": 2,
+  "entry": "index.mjs",
+  "permissions": {
+    "system": { "kind": "system", "label": "本机系统指标" }
+  },
+  "outputs": {
+    "cpuUsage": { "valueType": "number", "unit": "%" },
+    "memoryUsage": { "valueType": "progress", "unit": "%" },
+    "uptime": { "valueType": "number", "unit": "min" }
+  },
+  "widgets": {
+    "cpu-usage-history": {
+      "outputKey": "cpuUsage", "kind": "chart", "label": "CPU 占用",
+      "supportedSpans": [{ "w": 1, "h": 1 }],
+      "chart": { "series": "bar", "rangeSeconds": 3600, "sampleCount": 12, "min": 0, "max": 100 }
+    },
+    "cpu-trend": {
+      "outputKey": "cpuUsage", "kind": "trend", "label": "CPU 趋势",
+      "supportedSpans": [{ "w": 1, "h": 1 }],
+      "trend": { "comparisonSeconds": 300, "deltaUnit": "pp" }
+    },
+    "cpu-range": {
+      "outputKey": "cpuUsage", "kind": "range", "label": "CPU 区间",
+      "supportedSpans": [{ "w": 1, "h": 1 }],
+      "range": { "mode": "fixed", "min": 0, "max": 100 }
+    },
+    "memory": {
+      "outputKey": "memoryUsage", "kind": "progress", "label": "内存占用", "shortLabel": "内存",
+      "supportedSpans": [{ "w": 1, "h": 1 }]
+    },
+    "uptime": {
+      "outputKey": "uptime", "kind": "metric", "label": "开机时长",
+      "supportedSpans": [{ "w": 1, "h": 1 }]
+    }
+  }
+}

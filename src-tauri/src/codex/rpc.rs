@@ -1,11 +1,14 @@
-use super::metrics::{parse_limits, AccountLimits};
+use super::metrics::AccountLimits;
+use crate::collector::{
+    builtin,
+    process::{Framing, Session},
+};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc::{self, Receiver},
-    thread,
+    process::Command,
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -34,7 +37,7 @@ pub(super) struct Login {
 impl Login {
     pub fn poll(&mut self) -> Option<bool> {
         loop {
-            match self.rpc.messages.try_recv() {
+            match self.rpc.session.messages.try_recv() {
                 Ok(message) => {
                     if message.get("method").and_then(Value::as_str)
                         == Some("account/login/completed")
@@ -99,32 +102,45 @@ pub(super) fn read_account(cli: &Path, home: &Path) -> Result<Account, Failure> 
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .filter(|path| path.is_absolute());
-    let account = rpc.request(2, "account/read", Some(json!({ "refreshToken": false })))?;
-    let account = account.get("account").filter(|value| !value.is_null());
-    match account
-        .and_then(|value| value.get("type"))
-        .and_then(Value::as_str)
-    {
-        Some("chatgpt") => {}
-        Some(_) => return Err(Failure::UnsupportedLogin),
-        None => return Err(Failure::NeedsLogin),
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ScriptAccount {
+        login: String,
+        plan: Option<String>,
+        #[serde(default)]
+        limits: AccountLimits,
     }
-    let plan = account
-        .and_then(|value| value.get("planType"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
 
-    let response = rpc.request(3, "account/rateLimits/read", None)?;
-    Ok(Account {
-        plan,
-        limits: parse_limits(&response),
-        codex_home,
+    let script: ScriptAccount = builtin::codex_export("readAccount", json!({}), move |call| {
+        let method = call.params["method"].as_str().unwrap_or_default();
+        if call.operation != "rpc"
+            || call.alias != "appServer"
+            || !matches!(method, "account/read" | "account/rateLimits/read")
+        {
+            return Err("Codex 采集脚本调用了未授权的 RPC 方法。".into());
+        }
+        rpc.session.request(
+            method,
+            call.params.get("params").cloned(),
+            Instant::now() + RPC_TIMEOUT,
+        )
     })
+    .map_err(|_| Failure::Unavailable("Codex 未能读取账号数据。请检查登录状态和网络后重试。"))?;
+
+    match script.login.as_str() {
+        "chatgpt" => Ok(Account {
+            plan: script.plan,
+            limits: script.limits,
+            codex_home,
+        }),
+        "missing" => Err(Failure::NeedsLogin),
+        _ => Err(Failure::UnsupportedLogin),
+    }
 }
 
 pub(super) fn begin_login(cli: &Path, home: &Path) -> Result<Login, Failure> {
     let (mut rpc, _) = Rpc::initialize(cli, home)?;
-    let response = rpc.request(2, "account/login/start", Some(json!({"type":"chatgpt"})))?;
+    let response = rpc.request("account/login/start", Some(json!({"type":"chatgpt"})))?;
     let id = response
         .get("loginId")
         .and_then(Value::as_str)
@@ -153,22 +169,23 @@ pub(super) fn begin_login(cli: &Path, home: &Path) -> Result<Login, Failure> {
 }
 
 struct Rpc {
-    child: Child,
-    stdin: ChildStdin,
-    messages: Receiver<Value>,
+    session: Session,
 }
 
 impl Rpc {
     fn initialize(cli: &Path, home: &Path) -> Result<(Self, Value), Failure> {
         let mut rpc = Self::start(cli, home)?;
         let response = rpc.request(
-            1,
             "initialize",
             Some(json!({
                 "clientInfo":{"name":"tdisplay-studio","version":env!("CARGO_PKG_VERSION")}
             })),
         )?;
-        rpc.write(&json!({ "method": "initialized" }))?;
+        rpc.session
+            .notify("initialized", None, Instant::now() + RPC_TIMEOUT)
+            .map_err(|_| {
+                Failure::Unavailable("Codex CLI 提前退出，请确认 CLI 支持 App Server。")
+            })?;
         Ok((rpc, response))
     }
 
@@ -176,10 +193,7 @@ impl Rpc {
         let mut command = Command::new(cli);
         command
             .args(["app-server", "--listen", "stdio://"])
-            .current_dir(home)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .current_dir(home);
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         let paths = std::env::split_paths(&inherited)
             .filter(|path| path.is_absolute())
@@ -191,72 +205,56 @@ impl Rpc {
         if let Ok(path) = std::env::join_paths(paths) {
             command.env("PATH", path);
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-
-        let mut child = command
-            .spawn()
+        let session = Session::start(&mut command, Framing::Versionless)
             .map_err(|_| Failure::Unavailable("无法启动 Codex CLI，请检查路径和执行权限。"))?;
-        let stdin = child.stdin.take().expect("stdin is piped");
-        let stdout = child.stdout.take().expect("stdout is piped");
-        let (sender, messages) = mpsc::sync_channel(16);
-        thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Ok(message) = serde_json::from_str(&line) {
-                    if sender.send(message).is_err() {
-                        break;
-                    }
-                }
-            }
-        });
-        Ok(Self {
-            child,
-            stdin,
-            messages,
-        })
+        Ok(Self { session })
     }
 
-    fn write(&mut self, message: &Value) -> Result<(), Failure> {
-        writeln!(self.stdin, "{message}")
-            .and_then(|()| self.stdin.flush())
-            .map_err(|_| Failure::Unavailable("Codex CLI 提前退出，请确认 CLI 支持 App Server。"))
-    }
-
-    fn request(&mut self, id: u64, method: &str, params: Option<Value>) -> Result<Value, Failure> {
-        let mut request = json!({ "id": id, "method": method });
-        if let Some(params) = params {
-            request["params"] = params;
-        }
-        self.write(&request)?;
-        let deadline = Instant::now() + RPC_TIMEOUT;
-        loop {
-            let message = self
-                .messages
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|error| match error {
-                    mpsc::RecvTimeoutError::Timeout => {
-                        Failure::Unavailable("Codex 响应超时，请稍后重试。")
-                    }
-                    mpsc::RecvTimeoutError::Disconnected => {
-                        Failure::Unavailable("Codex CLI 已退出，请检查版本。")
-                    }
-                })?;
-            if message.get("id").and_then(Value::as_u64) != Some(id) {
-                continue;
-            }
-            return message.get("result").cloned().ok_or(Failure::Unavailable(
-                "Codex 未能读取账号数据。请检查登录状态和网络后重试。",
-            ));
-        }
+    fn request(&mut self, method: &str, params: Option<Value>) -> Result<Value, Failure> {
+        self.session
+            .request(method, params, Instant::now() + RPC_TIMEOUT)
+            .map_err(|_| {
+                Failure::Unavailable("Codex 未能读取账号数据。请检查登录状态和网络后重试。")
+            })
     }
 }
 
-impl Drop for Rpc {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn codex_script_reads_account_and_limits_over_the_stdio_transport() {
+        let root = std::env::temp_dir().join(format!("tdisplay-rpc-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let cli = root.join("codex-test");
+        fs::write(
+            &cli,
+            r#"#!/bin/sh
+printf '%s\n' 'test wrapper banner'
+IFS= read -r init
+case "$init" in *'"method":"initialize"'*) ;; *) exit 1 ;; esac
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r ready
+case "$ready" in *'"method":"initialized"'*) ;; *) exit 2 ;; esac
+IFS= read -r account
+case "$account" in *'"method":"account/read","params":{"refreshToken":false}'*) ;; *) exit 3 ;; esac
+printf '%s\n' '{"id":2,"result":{"account":{"type":"chatgpt","planType":"plus"}}}'
+IFS= read -r limits
+case "$limits" in *'"method":"account/rateLimits/read"'*) ;; *) exit 4 ;; esac
+printf '%s\n' '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":27}}}}'
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let account = read_account(&cli, &root);
+        fs::remove_dir_all(&root).unwrap();
+        let account = account
+            .ok()
+            .expect("script and stdio account query succeeded");
+        assert_eq!(account.plan.as_deref(), Some("plus"));
+        assert_eq!(account.limits.windows[0].remaining_percent, 73);
     }
 }

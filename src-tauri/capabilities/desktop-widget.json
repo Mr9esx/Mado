@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "virtual-window",
-  "description": "Allow moving and closing the frameless virtual display.",
+  "identifier": "desktop-widget",
+  "description": "Allow moving and closing the independent desktop widget. Pinning is handled by window-scoped Rust commands.",
   "windows": ["display"],
   "permissions": ["core:window:allow-start-dragging", "core:window:allow-close"]
 }

@@ -93,8 +93,11 @@
   }
   .metric-value { min-width: 0; overflow: hidden; font-size: 20px; line-height: 20px; font-weight: 700; }
   .metric-value.is-four-char { font-size: 17px; }
-  .metric-unit { display: flex; flex: none; flex-direction: column; max-width: 18px; overflow: hidden; font-size: 10px; line-height: 10px; }
-  .metric-unit span { overflow: hidden; white-space: nowrap; }
+  .metric-unit {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    flex: none; max-width: 18px; overflow: hidden; white-space: normal; overflow-wrap: anywhere;
+    font-size: 10px; line-height: 10px;
+  }
   .tile[data-rows="2"]:is([data-type="metric"], [data-type="progress"]) .reading { font-size: 32px; line-height: 32px; }
   .tile[data-rows="2"]:not(:has(.details)) .reading { top: 75px; transform: translateY(-50%); }
   .tile .details { position: absolute; inset: 84px 8px auto; font-size: 12px; line-height: 16px; }
@@ -292,9 +295,9 @@
     key, { color, seconds: 2, alertInk: 'auto', customInk: '#000000' },
   ]));
   const examples = {
-    quota: { type: 'progress', label: '额度', value: 81, unit: '%', unitLines: ['%'], ratio: 0.81, color: '#48b34a' },
-    speed: { id: 'speed', type: 'metric', label: '输出速度', value: 248, unit: 'tok/s', unitLines: ['tok', '/s'], color: '#397adc' },
-    resets: { type: 'metric', label: '重置卡', value: 0, unit: '张', unitLines: ['张'] },
+    quota: { type: 'progress', label: '额度', value: 81, unit: '%', ratio: 0.81, color: '#48b34a' },
+    speed: { id: 'speed', type: 'metric', label: '输出速度', value: 248, unit: 'tok/s', color: '#397adc' },
+    resets: { type: 'metric', label: '重置卡', value: 0, unit: '张' },
     recovery: { type: 'metric', label: '额度恢复', value: '5d4h' },
     cpu: { type: 'chart', label: 'CPU 占用', unit: '%', rangeSeconds: 3600, sampleCount: 12, min: 0, max: 100,
       points: [18, 26, 22, 42, 35, 61, 48, 73, 54, 88, 67, 79].map((value, index) => ({ timestamp: 1794200000000 + index * 300000, value })) },
@@ -433,9 +436,7 @@
 
   function metricMarkup(card) {
     const value = metricValueMarkup(card.value);
-    const unitLines = card.unitLines || (card.unit ? [card.unit] : []);
-    const unit = unitLines.length ? '<span class="metric-unit">' + unitLines.slice(0, 2)
-      .map((text) => '<span>' + escapeText(text.slice(0, 3)) + '</span>').join('') + '</span>' : '';
+    const unit = card.unit ? '<span class="metric-unit">' + escapeText(card.unit) + '</span>' : '';
     let tag = '';
     if (card.type === 'trend') {
       const direction = card.direction === 'down' ? 'down' : card.direction === 'up' ? 'up' : 'flat';

@@ -1,6 +1,20 @@
 use super::*;
 use serde_json::json;
 
+fn script_limits(response: Value) -> AccountLimits {
+    let account: Value =
+        crate::collector::builtin::codex_export("readAccount", json!({}), move |call| {
+            assert_eq!(call.alias, "appServer");
+            match call.params["method"].as_str().unwrap() {
+                "account/read" => Ok(json!({ "account": { "type": "chatgpt" } })),
+                "account/rateLimits/read" => Ok(response.clone()),
+                method => panic!("unexpected method {method}"),
+            }
+        })
+        .unwrap();
+    serde_json::from_value(account["limits"].clone()).unwrap()
+}
+
 #[test]
 fn uses_the_main_bucket_and_keeps_zero_reset_cards() {
     let response = json!({
@@ -15,7 +29,7 @@ fn uses_the_main_bucket_and_keeps_zero_reset_cards() {
         "rateLimitResetCredits": { "availableCount": 0 }
     });
 
-    let account = parse_limits(&response);
+    let account = script_limits(response);
     assert_eq!(
         account
             .windows
@@ -26,17 +40,23 @@ fn uses_the_main_bucket_and_keeps_zero_reset_cards() {
     );
     assert_eq!(account.windows[1].resets_at, Some(1900000000));
     assert_eq!(account.reset_count, Some(0));
-    assert_eq!(account.limiting_window().unwrap().remaining_percent, 50);
-    assert_eq!(account.limiting_window().unwrap().resets_at, None);
+    assert_eq!(account.windows[0].resets_at, None);
 }
 
 #[test]
-fn countdown_uses_the_window_with_the_lowest_remaining_quota() {
-    let account = parse_limits(&json!({ "rateLimits": {
+fn preserves_each_windows_reset_timestamp() {
+    let account = script_limits(json!({ "rateLimits": {
         "primary": { "usedPercent": 30, "windowDurationMins": 300, "resetsAt": 100 },
         "secondary": { "usedPercent": 80, "windowDurationMins": 10080, "resetsAt": 200 }
     } }));
-    assert_eq!(account.limiting_window().unwrap().resets_at, Some(200));
+    assert_eq!(
+        account
+            .windows
+            .iter()
+            .map(|window| window.resets_at)
+            .collect::<Vec<_>>(),
+        [Some(100), Some(200)]
+    );
 }
 
 #[test]
@@ -104,10 +124,7 @@ fn task_reading_keeps_the_full_title_without_switching_on_log_writes() {
     assert_eq!(active.state, TaskState::Running);
     assert_eq!(active.title.as_deref(), Some(title));
     let stale = cache
-        .read(
-            &fixture,
-            newer_write + ACTIVE_WINDOW + Duration::from_secs(1),
-        )
+        .read(&fixture, newer_write + Duration::from_secs(181))
         .task
         .unwrap();
     assert_eq!(stale.state, TaskState::Unknown);
@@ -116,8 +133,8 @@ fn task_reading_keeps_the_full_title_without_switching_on_log_writes() {
 
 #[test]
 fn absent_quota_and_reset_count_are_unknown() {
-    let account = parse_limits(&json!({ "rateLimitResetCredits": null }));
-    assert!(account.limiting_window().is_none());
+    let account = script_limits(json!({ "rateLimitResetCredits": null }));
+    assert!(account.windows.is_empty());
     assert_eq!(account.reset_count, None);
 }
 
@@ -132,8 +149,11 @@ fn response_speed_excludes_tool_runtime_and_deduplicates_usage() {
 {"timestamp":"2026-11-09T01:00:15.001Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":160},"last_token_usage":{"output_tokens":60}}}}
 {"timestamp":"2026-11-09T01:00:16Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":160},"last_token_usage":{"output_tokens":60}}}}
 "#;
-    let mut samples = parse_rollout(log.as_bytes()).samples;
-    let speed = average_speed(&mut samples).unwrap();
+    let samples = parse_rollout(log.as_bytes()).samples;
+    let speed = summarize(json!({ "samples": samples, "turns": [], "nowMicros": 0 }))
+        .unwrap()
+        .speed
+        .unwrap();
     assert_eq!(speed.samples, 2);
     assert_eq!(speed.tokens_per_second, 32);
 }
@@ -145,7 +165,10 @@ fn copied_samples_do_not_count_twice_in_a_forked_rollout() {
         duration_ms: 1000,
         ended_ms: 2000,
     };
-    let mut samples = vec![sample.clone(), sample];
-    let speed = average_speed(&mut samples).unwrap();
+    let samples = vec![sample.clone(), sample];
+    let speed = summarize(json!({ "samples": samples, "turns": [], "nowMicros": 0 }))
+        .unwrap()
+        .speed
+        .unwrap();
     assert_eq!(speed.samples, 1);
 }

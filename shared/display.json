@@ -3,17 +3,10 @@
   "height": 170,
   "columns": 4,
   "rows": 2,
+  "maxPages": 5,
   "padding": 4,
   "gap": 4,
   "statusHeight": 26,
-  "groups": [{ "id": "codex", "name": "Codex" }],
-  "widgets": [
-    { "id": "quota", "group": "codex", "name": "剩余额度", "shortName": "额度", "unit": "%", "sizes": [[1, 1]], "kind": "progress" },
-    { "id": "speed", "group": "codex", "name": "响应速度", "shortName": "速度", "unit": "tok/s", "sizes": [[1, 1]], "kind": "number" },
-    { "id": "resets", "group": "codex", "name": "重置卡", "shortName": "重置卡", "unit": "张", "sizes": [[1, 1]], "kind": "number" },
-    { "id": "quota-reset", "group": "codex", "name": "额度恢复倒计时", "shortName": "额度恢复", "unit": "", "sizes": [[1, 1]], "kind": "countdown" },
-    { "id": "task", "group": "codex", "name": "任务状态", "shortName": "任务状态", "unit": "", "sizes": [[1, 1]], "kind": "task" }
-  ],
   "initialLayout": [
     { "id": "quota", "x": 0, "y": 0, "w": 1, "h": 1 },
     { "id": "speed", "x": 2, "y": 0, "w": 1, "h": 1 },

@@ -13,6 +13,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 time = { version = "0.3", features = ["parsing"] }
 walkdir = "2"
+rquickjs = { version = "0.12", features = ["loader"] }
+sysinfo = "0.38"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.13", features = ["blocking"] }
+tauri-plugin-dialog = "2"
+libc = "0.2"
+cap-std = "3"
 
 [profile.dev]
 debug = 0
