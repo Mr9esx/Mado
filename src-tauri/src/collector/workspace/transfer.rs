@@ -174,8 +174,14 @@ pub fn import_collector(
 fn write_project(project: &Project, root: &Path) -> Result<(), String> {
     fs::create_dir(root).map_err(|error| format!("无法建立导出目录：{error}"))?;
     let result = (|| {
+        let mut exported_manifest = project.manifest.clone();
+        for setting in exported_manifest.definition.settings.values_mut() {
+            if setting.secret == Some(true) {
+                setting.default.clear();
+            }
+        }
         let manifest =
-            serde_json::to_vec_pretty(&project.manifest).map_err(|error| error.to_string())?;
+            serde_json::to_vec_pretty(&exported_manifest).map_err(|error| error.to_string())?;
         fs::write(root.join("manifest.json"), manifest).map_err(|error| error.to_string())?;
         for (path, text) in &project.files {
             if !path_valid(path) || path == "manifest.json" {
@@ -250,6 +256,58 @@ mod tests {
         assert_eq!(exported.files, project.files);
         assert_eq!(exported.fixture, json!({}));
     }
+
+    #[test]
+    fn exporting_a_project_redacts_secret_variable_defaults_only() {
+        let mut project = create_template("测试".into(), "http")
+            .unwrap()
+            .project(false)
+            .unwrap();
+        project.manifest.definition.settings.insert(
+            "API_TOKEN".into(),
+            Setting {
+                label: "API 令牌".into(),
+                default: "private-default-token".into(),
+                description: Some("导出时不应泄漏".into()),
+                required: Some(false),
+                secret: Some(true),
+            },
+        );
+        project.manifest.definition.settings.insert(
+            "PUBLIC_VALUE".into(),
+            Setting {
+                label: "公开参数".into(),
+                default: "public-default".into(),
+                description: None,
+                required: None,
+                secret: Some(false),
+            },
+        );
+        let root =
+            std::env::temp_dir().join(format!("tdisplay-secret-export-{}", uuid::Uuid::new_v4()));
+
+        write_project(&project, &root).unwrap();
+        let manifest = fs::read_to_string(root.join("manifest.json")).unwrap();
+        let exported: Manifest = serde_json::from_str(&manifest).unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(!manifest.contains("private-default-token"));
+        let secret = &exported.definition.settings["API_TOKEN"];
+        assert_eq!(secret.label, "API 令牌");
+        assert_eq!(secret.default, "");
+        assert_eq!(secret.description.as_deref(), Some("导出时不应泄漏"));
+        assert_eq!(secret.required, Some(false));
+        assert_eq!(secret.secret, Some(true));
+        assert_eq!(
+            exported.definition.settings["PUBLIC_VALUE"].default,
+            "public-default"
+        );
+        assert_eq!(
+            project.manifest.definition.settings["API_TOKEN"].default,
+            "private-default-token"
+        );
+    }
+
     #[test]
     fn an_authored_fixture_file_round_trips_as_a_project_file() {
         let mut project = create_template("测试".into(), "http")
