@@ -5,7 +5,7 @@ import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
 import { CollectorCode } from './CollectorCode'
 import { CollectorFiles, projectItems, samplePath } from './CollectorFiles'
-import { CollectorAuthorization, CollectorCodexSettings } from './CollectorAuthorization'
+import { CollectorAuthorization, CollectorCodexSettings, type AuthorizationPurpose } from './CollectorAuthorization'
 import { CollectorVariableForm } from './CollectorVariableForm'
 import { cancelCollectorAction, createDraft, exportModule, focusLayout, getCatalog, getCollectorVariables, getDraft, getGrantRequests, importModule, inspectImport, publishDraft, readDefinition, runCollectorAction, saveCollectorVariables, saveDraft, setCollectorEnabled, testDraft, type Approval, type Catalog, type CollectorVariables, type Draft, type GrantRequest, type ImportReview, type TestResult } from './collectorApi'
 import { WidgetReading } from './WidgetReading'
@@ -48,7 +48,7 @@ export function CollectorWorkspace() {
   const [testedDraft, setTestedDraft] = useState<Draft>()
   const [jumpLine, setJumpLine] = useState<number>()
   const [resultView, setResultView] = useState<'preview' | 'output' | 'sample'>('preview')
-  const [grantPrompt, setGrantPrompt] = useState<{ requests: GrantRequest[]; live: boolean; confirm: (approval?: Approval) => void }>()
+  const [grantPrompt, setGrantPrompt] = useState<{ requests: GrantRequest[]; purpose: AuthorizationPurpose; confirm: (approval?: Approval) => void }>()
   const [variableForm, setVariableForm] = useState<{ id: string; variables: CollectorVariables }>()
   const [variableChanges, setVariableChanges] = useState<Record<string, string>>({})
   const testedApproval = useRef<{ draft: Draft; approval: Approval } | undefined>(undefined)
@@ -117,7 +117,7 @@ export function CollectorWorkspace() {
       } else {
         let approval: Approval | undefined
         if (enabled && module?.builtIn) {
-          const authorization = await requestApproval(await getDraft(id))
+          const authorization = await requestApproval(await getDraft(id), { purpose: 'enable' })
           if (!authorization.accepted) return
           approval = authorization.approval
         }
@@ -287,7 +287,7 @@ export function CollectorWorkspace() {
     }
   }
 
-  async function requestApproval(draft: Draft, { restore = false, live = false } = {}) {
+  async function requestApproval(draft: Draft, { restore = false, live = false, purpose }: { restore?: boolean; live?: boolean; purpose?: AuthorizationPurpose } = {}) {
     const requests = await getGrantRequests(draft, restore, live)
     if (requests.length === 0) return { accepted: true } as const
     const previous = testedApproval.current
@@ -295,7 +295,7 @@ export function CollectorWorkspace() {
         && JSON.stringify(previous.approval.requests) === JSON.stringify(requests)) {
       return { accepted: true, approval: previous.approval } as const
     }
-    const approval = await new Promise<Approval | undefined>(confirm => setGrantPrompt({ requests, live, confirm }))
+    const approval = await new Promise<Approval | undefined>(confirm => setGrantPrompt({ requests, purpose: purpose ?? (live ? 'test' : 'publish'), confirm }))
     return approval ? { accepted: true, approval } as const : { accepted: false } as const
   }
 
@@ -612,7 +612,7 @@ export function CollectorWorkspace() {
         </div>}
       </section>
     </div>
-    {grantPrompt && <CollectorAuthorization requests={grantPrompt.requests} live={grantPrompt.live} onFinish={finishGrantPrompt} />}
+    {grantPrompt && <CollectorAuthorization requests={grantPrompt.requests} purpose={grantPrompt.purpose} onFinish={finishGrantPrompt} />}
     {showCodexSettings && <CollectorCodexSettings onDismiss={() => setShowCodexSettings(false)} />}
   </main>
 }

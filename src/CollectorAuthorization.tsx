@@ -7,9 +7,17 @@ import { CodexSettings } from './CodexSettings'
 import { useCodexStatus } from './codex'
 import { chooseResource, type Approval, type GrantRequest } from './collectorApi'
 
-export function CollectorAuthorization({ requests, live, onFinish }: {
+export type AuthorizationPurpose = 'test' | 'publish' | 'enable'
+
+export function authorizationDescription(purpose: AuthorizationPurpose) {
+  if (purpose === 'test') return '本次试跑将访问以下资源，同一份草稿发布时可以沿用授权。'
+  if (purpose === 'enable') return '启用后，采集器会按以下范围访问资源。'
+  return '发布后，应用会按以下范围代脚本访问资源。'
+}
+
+export function CollectorAuthorization({ requests, purpose, onFinish }: {
   requests: GrantRequest[]
-  live: boolean
+  purpose: AuthorizationPurpose
   onFinish: (approval?: Approval) => void
 }) {
   const [targets, setTargets] = useState<Record<string, string>>({})
@@ -25,7 +33,7 @@ export function CollectorAuthorization({ requests, live, onFinish }: {
       if (ready) onFinish({ requests, targets })
     }}>
       <DialogTitle>确认资源授权</DialogTitle>
-      <DialogDescription className="source-caption">{live ? '本次试跑将访问以下资源，同一份草稿发布时可以沿用授权。' : '发布后，应用会按以下范围代脚本访问资源。'}</DialogDescription>
+      <DialogDescription className="source-caption">{authorizationDescription(purpose)}</DialogDescription>
       <div className="collector-grants">
         {requests.map(({ key, label, scope, target }) => {
           const http = scope.kind === 'http' || scope.kind === 'httpJson'
