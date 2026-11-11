@@ -1,5 +1,5 @@
 use super::{
-    model::{path_valid, Collected, MAX_PROJECT},
+    model::{path_valid, Collected, Definition, MAX_PROJECT},
     process::ManagedChild,
 };
 use rquickjs::{
@@ -8,7 +8,7 @@ use rquickjs::{
     CatchResultExt, Context, Ctx, Error, Function, Module, Object, Promise, Runtime,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{value::RawValue, Value};
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -50,7 +50,7 @@ pub struct ResultData {
     pub logs: Vec<String>,
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub definition: Option<Value>,
+    pub definition: Option<Definition>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -64,7 +64,7 @@ pub struct Call {
 enum Message {
     Call(Call),
     Done(ResultData),
-    Definition(Reply),
+    Definition(InspectedDefinition),
 }
 
 #[derive(Deserialize, Serialize)]
@@ -81,6 +81,7 @@ enum Entry {
 }
 
 type Reply = Result<Value, String>;
+type InspectedDefinition = Result<Box<RawValue>, String>;
 
 struct ProjectResolver;
 
@@ -315,7 +316,7 @@ fn safe_message(message: String, hidden: &[String], limit: usize) -> String {
     message.chars().take(limit).collect()
 }
 
-pub(super) fn inspect_code(request: Request) -> Reply {
+pub(super) fn inspect_code(request: Request) -> InspectedDefinition {
     run(
         request,
         Entry::Inspect,
@@ -326,7 +327,7 @@ pub(super) fn inspect_code(request: Request) -> Reply {
     .map_err(|error| error.chars().take(3000).collect())
 }
 
-pub fn inspect(request: Request) -> Reply {
+pub fn inspect(request: Request) -> InspectedDefinition {
     match exchange(
         Job {
             request,
@@ -492,7 +493,7 @@ mod tests {
 
     #[test]
     fn reads_definition_from_the_entry_and_its_imports_without_collecting() {
-        let result = inspect_code(Request {
+        let encoded = inspect_code(Request {
             entry: "src/index.mjs".into(),
             files: BTreeMap::from([
                 (
@@ -501,7 +502,8 @@ mod tests {
                     import { defineModule } from '@tdisplay/sdk'
                     import { schedule } from './schedule.mjs'
                     export default defineModule({
-                        name: "Test", schedule, permissions: {}, resources: {},
+                        name: "Test", schedule, settings: { SECOND: { label: '二', required: false }, FIRST: { label: '一', required: false } },
+                        permissions: {}, resources: {},
                         outputs: {}, widgets: {}, collect() { throw new Error("must not run") }
                     })
                 "#
@@ -519,6 +521,16 @@ mod tests {
             state: Value::Null,
         })
         .unwrap();
+        let definition: Definition = serde_json::from_str(encoded.get()).unwrap();
+        assert_eq!(
+            definition
+                .settings
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["SECOND", "FIRST"]
+        );
+        let result: Value = serde_json::from_str(encoded.get()).unwrap();
         assert_eq!(result["name"], "Test");
         assert_eq!(result["schedule"]["refreshSeconds"], 19);
         assert!(result.get("collect").is_none());

@@ -21,12 +21,20 @@ export type ModuleSummary = {
   actions: string[]
   actionInstance: string | null
   activeAction: string | null
+  variableInstances: { id: string; name: string; enabled: boolean }[]
 }
 
 export type Catalog = {
   modules: ModuleSummary[]
   status: Record<string, { updatedAt?: number; error?: string }>
 }
+
+export type CollectorVariables = {
+  fields: { key: string; label: string; description?: string | null; required: boolean; secret: boolean; value?: string }[]
+  configured: Record<string, boolean>
+}
+
+type CollectorInstanceStatus = { enabled: boolean; error: string | null; sequence: number }
 
 export type TestResult = {
   result: { outputs: Record<string, Record<string, unknown> | null>; notifications: string[] } | null
@@ -60,7 +68,7 @@ export type Approval = {
 export type Definition = {
   name?: string
   inputs?: Record<string, { kind: 'httpJson' | 'fileJson' | 'native'; label: string }>
-  settings?: Record<string, { label: string; default?: string }>
+  settings?: Record<string, { label: string; default?: string; description?: string; required?: boolean; secret?: boolean }>
   permissions?: Record<string, Permission>
   schedule?: { refreshSeconds: number; enabled: boolean }
   resources?: Record<string, string>
@@ -93,6 +101,11 @@ export function readDefinition(text: string): Definition {
 export const openCollectors = () => invoke<void>('open_collectors')
 export const focusLayout = () => invoke<void>('focus_layout')
 export const getCatalog = () => invoke<Catalog>('collector_catalog')
+export const getCollectorVariables = (id: string) => invoke<CollectorVariables>('get_collector_variables', { id })
+export const saveCollectorVariables = (id: string, values: Record<string, string>) =>
+  invoke<CollectorInstanceStatus>('save_collector_variables', { id, values })
+export const setCollectorEnabled = (id: string, enabled: boolean) =>
+  invoke<CollectorInstanceStatus>('set_collector_enabled', { id, enabled })
 export const runCollectorAction = (id: string, action: string) =>
   invoke<void>('run_collector_action', { id, action })
 export const cancelCollectorAction = (id: string) =>

@@ -150,7 +150,7 @@ pub fn settings(
 ) -> Result<Value, String> {
     let mut settings = Map::new();
     for (key, setting) in &definition.settings {
-        let value = values.get(key).unwrap_or(&setting.default);
+        let value = setting.value(values.get(key));
         if value.len() > 4096 {
             return Err(format!("{}的值过长。", setting.label));
         }

@@ -10,7 +10,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
+indexmap = { version = "2", features = ["serde"] }
 serialport = { version = "4.8", default-features = false }
 time = { version = "0.3", features = ["parsing"] }
 walkdir = "2"

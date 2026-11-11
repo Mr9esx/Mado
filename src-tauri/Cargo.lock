@@ -2511,6 +2511,7 @@ dependencies = [
  "btleplug",
  "cap-std",
  "futures-util",
+ "indexmap 2.14.2",
  "libc",
  "mdns-sd",
  "rcgen",

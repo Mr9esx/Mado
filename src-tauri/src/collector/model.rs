@@ -1,4 +1,5 @@
 use crate::device::{Widget, WidgetValue};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -37,8 +38,8 @@ pub struct Definition {
     pub name: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inputs: BTreeMap<String, Input>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub settings: BTreeMap<String, Setting>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub settings: IndexMap<String, Setting>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub permissions: BTreeMap<String, Permission>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,6 +52,20 @@ pub struct Definition {
     pub suggested_bindings: BTreeMap<String, BindingHint>,
     pub outputs: BTreeMap<String, Output>,
     pub widgets: BTreeMap<String, WidgetSpec>,
+}
+
+impl Definition {
+    pub fn validate_required_variables(
+        &self,
+        values: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        for (key, setting) in &self.settings {
+            if setting.required == Some(true) && setting.value(values.get(key)).trim().is_empty() {
+                return Err(format!("请配置{}。", setting.label));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -91,6 +106,10 @@ pub struct Setting {
 impl Setting {
     pub fn is_variable(&self) -> bool {
         self.description.is_some() || self.required.is_some() || self.secret.is_some()
+    }
+
+    pub fn value<'a>(&'a self, configured: Option<&'a String>) -> &'a str {
+        configured.unwrap_or(&self.default)
     }
 
     fn valid(&self, key: &str) -> bool {

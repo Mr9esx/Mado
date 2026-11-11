@@ -1,8 +1,8 @@
 import { acceptCompletion, autocompletion, closeBrackets, closeBracketsKeymap, snippetCompletion, type Completion, type CompletionContext } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { javascript } from '@codemirror/lang-javascript'
+import { javascript, javascriptLanguage } from '@codemirror/lang-javascript'
 import { json } from '@codemirror/lang-json'
-import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language'
+import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import { EditorState, Prec } from '@codemirror/state'
 import { EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
@@ -18,13 +18,38 @@ const studioSyntax = HighlightStyle.define([
   { tag: tags.invalid, class: 'studio-syntax-invalid' },
 ])
 
-function completion(context: CompletionContext, file: string, draft: Draft) {
+function declaredVariableKeys(tree: ReturnType<typeof syntaxTree>, source: string) {
+  const keys = new Set<string>()
+  tree.iterate({ enter(node) {
+    if (node.name !== 'Property' || !node.node.firstChild) return
+    const property = node.node.firstChild
+    if (!/^(?:settings|"settings"|'settings')$/.test(source.slice(property.from, property.to))) return
+    for (const field of node.node.getChild('ObjectExpression')?.getChildren('Property') ?? []) {
+      const name = field.firstChild
+      if (!name) continue
+      const key = source.slice(name.from, name.to).replace(/^['"]|['"]$/g, '')
+      if (/^[A-Z][A-Z0-9_]*$/.test(key)) keys.add(key)
+    }
+  } })
+  return keys
+}
+
+export function collectorCompletion(context: CompletionContext, file: string, draft: Draft) {
   const definition = readDefinition(draft.definition)
   const before = context.state.sliceDoc(0, context.pos)
   const token = context.matchBefore(/[\w@./-]*/)
   if (!token || (token.from === token.to && !context.explicit && !/["'.]$/.test(before))) return null
   const v2 = draft.sdkApiVersion === 2
   const properties = (labels: string[]) => labels.map(label => ({ label, type: 'property' }))
+  const settingsOptions = () => {
+    const fields = new Map(Object.entries(definition.settings ?? {}).map(([key, field]) => [key, field.label]))
+    const entry = file === draft.entry ? context.state.doc.toString() : draft.files[draft.entry] ?? ''
+    const tree = file === draft.entry ? syntaxTree(context.state) : javascriptLanguage.parser.parse(entry)
+    for (const key of declaredVariableKeys(tree, entry)) {
+      if (!fields.has(key)) fields.set(key, '采集变量')
+    }
+    return [...fields].map(([label, detail]) => ({ label, detail, type: 'property' }))
+  }
   const from = context.pos - (before.match(/[\w-]*$/)?.[0].length ?? 0)
   let options: Completion[]
   if (file === draft.entry && /["']?(kind|valueType|outputKey)["']?\s*:\s*["'][\w-]*$/.test(before)) {
@@ -39,6 +64,7 @@ function completion(context: CompletionContext, file: string, draft: Draft) {
     }
   } else if (file === 'fixtures/sample.json') {
     options = properties(v2 ? ['settings', 'calls', 'operation', 'alias', 'params', 'result'] : Object.keys(definition.inputs ?? {}))
+    if (v2) options.push(...settingsOptions().filter(({ label }) => /^[A-Z][A-Z0-9_]*$/.test(label)))
   } else if (/\b(?:from|import)\s*['"][^'"]*$/.test(before)) {
     const parent = file.split('/').slice(0, -1)
     options = ['@mado/sdk', ...Object.keys(draft.files).filter(path => path !== file && /\.m?js$/.test(path)).map(path => {
@@ -70,8 +96,8 @@ function completion(context: CompletionContext, file: string, draft: Draft) {
       ...properties(v2 ? ['http', 'files', 'process', 'system'] : []),
     ] }
   } else if (/\b(?:inputs|settings)\.[\w]*$/.test(before)) {
-    const fields = v2 ? definition.settings : definition.inputs
-    return { from, options: Object.entries(fields ?? {}).map(([label, field]) => ({ label, type: 'property', detail: field.label })) }
+    return { from, options: v2 ? settingsOptions()
+      : Object.entries(definition.inputs ?? {}).map(([label, field]) => ({ label, type: 'property', detail: field.label })) }
   } else {
     options = [
       snippetCompletion(v2
@@ -80,9 +106,10 @@ function completion(context: CompletionContext, file: string, draft: Draft) {
         label: 'defineModule', type: 'function', detail: 'Mado SDK',
       }),
       ...(file === draft.entry ? properties(['name', 'schedule', 'refreshSeconds', 'enabled', 'resources',
-        ...(v2 ? ['settings', 'permissions', 'default', 'methods', 'args'] : ['inputs']),
+        ...(v2 ? ['settings', 'permissions', 'default', 'description', 'required', 'secret', 'methods', 'args'] : ['inputs']),
         'widgets', 'kind', 'label', 'valueType', 'unit', 'outputKey', 'supportedSpans', 'stateKeys',
         'stateLabels', 'chart', 'trend', 'range', 'format', 'accentColor', 'collect']) : []),
+      ...(v2 && file === draft.entry ? settingsOptions().filter(({ label }) => /^[A-Z][A-Z0-9_]*$/.test(label)) : []),
       ...Object.keys(definition.outputs ?? {}).map(label => ({ label, type: 'property', detail: '模块输出' })),
       ...Object.keys(definition.inputs ?? {}).map(label => ({ label, type: 'property', detail: '模块输入' })),
       ...['outputs', 'notifications', 'value', 'ratio', 'deadlineUnixMs', 'state', 'detail'].map(label => ({ label, type: 'property' })),
@@ -118,7 +145,7 @@ export function CollectorCode({ draft, file, value, readOnly, jumpLine, onChange
         EditorState.readOnly.of(readOnly),
         EditorView.editable.of(!readOnly),
         EditorView.contentAttributes.of({ 'aria-label': file === 'fixtures/sample.json' ? '样例 JSON 编辑器' : '采集器代码编辑器', spellcheck: 'false' }),
-        autocompletion({ override: [context => completion(context, file, current.current.draft)] }),
+        autocompletion({ override: [context => collectorCompletion(context, file, current.current.draft)] }),
         Prec.highest(keymap.of([{ key: 'Tab', run: acceptCompletion }])),
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap]),
         EditorView.updateListener.of(update => {

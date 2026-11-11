@@ -1,8 +1,8 @@
 use super::{
     builtin, io,
     model::{
-        path_valid, BindingHint, History, Manifest, Permission, Project, Setting, MAX_FILES,
-        MAX_PROJECT,
+        path_valid, BindingHint, Definition, History, Manifest, Permission, Project, Setting,
+        MAX_FILES, MAX_PROJECT,
     },
     now, runner, vault::KeyStore,
 };
@@ -99,10 +99,13 @@ impl Draft {
         };
         let original = serde_json::to_string(&format!("./{original_path}"))
             .map_err(|error| error.to_string())?;
-        let metadata = serde_json::from_str::<Value>(&self.definition)
-            .ok()
-            .and_then(|definition| serde_json::to_string_pretty(&definition).ok())
-            .unwrap_or_else(|| self.definition.clone());
+        let metadata = serde_json::from_str::<Definition>(&self.definition)
+            .and_then(|definition| serde_json::to_string_pretty(&definition))
+            .or_else(|_| {
+                serde_json::from_str::<Value>(&self.definition)
+                    .and_then(|definition| serde_json::to_string_pretty(&definition))
+            })
+            .unwrap_or_else(|_| self.definition.clone());
         let source = format!(
             "import {{ defineModule }} from '@mado/sdk'\nimport previous from {original}\n\nexport default defineModule({{{}\n  collect: previous.collect,\n  handlers: previous.handlers,\n}})\n",
             definition_members(&metadata)
@@ -133,7 +136,7 @@ impl Draft {
         })
         .map_err(|error| format!("入口脚本定义：{error}"))?;
         let mut inspected = self.clone();
-        inspected.definition = value.to_string();
+        inspected.definition = value.get().to_owned();
         if !offline {
             inspected.fixture = "{}".into();
         } else if let Some(file) = inspected.files.get("fixtures/sample.json") {
@@ -270,7 +273,7 @@ struct StoredCatalog {
 }
 
 impl<T> Catalog<T> {
-    fn declared_settings(&self, module_id: &str) -> Option<&BTreeMap<String, Setting>> {
+    fn declared_settings(&self, module_id: &str) -> Option<&indexmap::IndexMap<String, Setting>> {
         // Bundled releases are deliberately excluded from the disk catalog.
         builtin::get(module_id)
             .or_else(|| {
@@ -359,6 +362,31 @@ pub struct ModuleSummary {
     actions: Vec<String>,
     action_instance: Option<String>,
     active_action: Option<String>,
+    variable_instances: Vec<VariableInstance>,
+}
+
+#[derive(Serialize)]
+struct VariableInstance {
+    id: String,
+    name: String,
+    enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct CollectorVariables {
+    fields: Vec<VariableField>,
+    configured: BTreeMap<String, bool>,
+}
+
+#[derive(Serialize)]
+struct VariableField {
+    key: String,
+    label: String,
+    description: Option<String>,
+    required: bool,
+    secret: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -478,6 +506,114 @@ impl Workspace {
         }))
     }
 
+    fn variable_target(&self, id: &str) -> Result<(&Instance, &Definition), String> {
+        let instance = match self.catalog.instances.get(id) {
+            Some(instance) => instance,
+            None => {
+                let mut instances = self
+                    .catalog
+                    .instances
+                    .values()
+                    .filter(|source| source.module_id == id);
+                let instance = instances.next().ok_or("找不到已发布的采集实例。")?;
+                if instances.next().is_some() {
+                    return Err("请选择要配置的采集实例。".into());
+                }
+                instance
+            }
+        };
+        let release = self
+            .catalog
+            .modules
+            .get(&instance.module_id)
+            .and_then(|module| module.released.as_ref())
+            .ok_or("找不到已发布的采集模块。")?;
+        Ok((instance, &release.project.manifest.definition))
+    }
+
+    fn collector_variables(&self, id: &str) -> Result<CollectorVariables, String> {
+        let (instance, definition) = self.variable_target(id)?;
+        let mut configured = BTreeMap::new();
+        let fields = definition
+            .settings
+            .iter()
+            .filter(|(_, setting)| setting.is_variable())
+            .map(|(key, setting)| {
+                let value = setting.value(instance.settings.get(key));
+                let secret = setting.secret == Some(true);
+                configured.insert(key.clone(), !value.trim().is_empty());
+                VariableField {
+                    key: key.clone(),
+                    label: setting.label.clone(),
+                    description: setting.description.clone(),
+                    required: setting.required == Some(true),
+                    secret,
+                    value: (!secret).then(|| value.to_owned()),
+                }
+            })
+            .collect();
+        Ok(CollectorVariables { fields, configured })
+    }
+
+    fn configure_variables(
+        &mut self,
+        id: &str,
+        values: BTreeMap<String, String>,
+    ) -> Result<String, String> {
+        let (instance, definition) = self.variable_target(id)?;
+        let mut next = instance.clone();
+        for (key, value) in values {
+            let setting = definition
+                .settings
+                .get(&key)
+                .filter(|setting| setting.is_variable())
+                .ok_or("提交的变量未在发布版本中声明。")?;
+            if value.trim().is_empty() {
+                if setting.default.trim().is_empty() {
+                    next.settings.remove(&key);
+                } else {
+                    next.settings.insert(key, String::new());
+                }
+            } else {
+                next.settings.insert(key, value);
+            }
+        }
+        definition.validate_required_variables(&next.settings)?;
+        io::settings(definition, &next.settings)?;
+        self.save_variable_instance(next)
+    }
+
+    fn set_collector_enabled(&mut self, id: &str, enabled: bool) -> Result<String, String> {
+        let (instance, definition) = self.variable_target(id)?;
+        if !definition.settings.values().any(Setting::is_variable) {
+            return Err("此采集器没有可配置变量。".into());
+        }
+        let mut next = instance.clone();
+        if enabled {
+            definition.validate_required_variables(&next.settings)?;
+            io::settings(definition, &next.settings)?;
+            if definition.permissions != next.approved_permissions {
+                return Err("模块的资源授权已变化，请重新发布并确认。".into());
+            }
+        }
+        next.enabled = enabled;
+        self.save_variable_instance(next)
+    }
+
+    fn save_variable_instance(&mut self, instance: Instance) -> Result<String, String> {
+        let id = instance.id.clone();
+        let mut catalog = self.catalog.clone();
+        catalog.instances.insert(id.clone(), instance);
+        self.save(catalog)?;
+        if let Some(interaction) = self.interactions.remove(&id) {
+            interaction.cancelled.store(true, Ordering::Relaxed);
+        }
+        self.status.remove(&id);
+        self.refresh.insert(id.clone());
+        self.sequence += 1;
+        Ok(id)
+    }
+
     fn save(&mut self, next: Catalog) -> Result<(), String> {
         let directory = self.path.parent().ok_or("找不到采集器配置目录。")?;
         if let Some(key) = &self.key {
@@ -545,12 +681,35 @@ impl Workspace {
             .values()
             .map(|module| {
                 let built_in = builtin::get(&module.draft.id).is_some();
-                let action_instance = self
+                let instances = self
                     .catalog
                     .instances
                     .values()
-                    .find(|instance| instance.module_id == module.draft.id && instance.enabled)
+                    .filter(|instance| instance.module_id == module.draft.id);
+                let action_instance = instances
+                    .clone()
+                    .find(|instance| instance.enabled)
                     .map(|instance| instance.id.clone());
+                let has_variables = module.released.as_ref().is_some_and(|release| {
+                    release
+                        .project
+                        .manifest
+                        .definition
+                        .settings
+                        .values()
+                        .any(Setting::is_variable)
+                });
+                let variable_instances = if has_variables {
+                    instances
+                        .map(|instance| VariableInstance {
+                            id: instance.id.clone(),
+                            name: instance.name.clone(),
+                            enabled: instance.enabled,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 ModuleSummary {
                     id: module.draft.id.clone(),
                     name: module
@@ -582,6 +741,7 @@ impl Workspace {
                         .as_ref()
                         .and_then(|id| self.interactions.get(id).map(|action| action.name.clone())),
                     action_instance,
+                    variable_instances,
                 }
             })
             .collect();
@@ -706,6 +866,9 @@ pub(crate) fn configure_bundled(
         instance.settings.extend(bindings);
         instance.approved_permissions = definition.permissions.clone();
     }
+    if enabled {
+        definition.validate_required_variables(&instance.settings)?;
+    }
     workspace.save(catalog)?;
     if let Some(interaction) = workspace.interactions.remove(id) {
         interaction.cancelled.store(true, Ordering::Relaxed);
@@ -749,6 +912,10 @@ pub(crate) fn run_action(app: &AppHandle, id: &str, name: &str) -> Result<(), St
         .and_then(|module| module.released.as_ref())
         .map(|release| &release.project)
         .ok_or("找不到已发布的采集器。")?;
+    project
+        .manifest
+        .definition
+        .validate_required_variables(&instance.settings)?;
     if !project
         .manifest
         .definition
@@ -919,6 +1086,55 @@ pub fn collector_catalog(
 ) -> Result<WorkspaceView, String> {
     command_window(&window)?;
     Ok(state.lock().map_err(|error| error.to_string())?.view())
+}
+
+#[tauri::command]
+pub fn get_collector_variables(
+    window: tauri::WebviewWindow,
+    state: State<'_, Mutex<Workspace>>,
+    id: String,
+) -> Result<CollectorVariables, String> {
+    command_window(&window)?;
+    state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .collector_variables(&id)
+}
+
+fn update_collector_variables(
+    app: &AppHandle,
+    update: impl FnOnce(&mut Workspace) -> Result<String, String>,
+) -> Result<Value, String> {
+    let state = app.state::<Mutex<Workspace>>();
+    let mut workspace = state.lock().map_err(|error| error.to_string())?;
+    let id = update(&mut workspace)?;
+    super::publish_readings(app, &id, BTreeMap::new());
+    let _ = app.emit(STATUS_EVENT, &id);
+    workspace.instance_status(&id)
+}
+
+#[tauri::command]
+pub fn save_collector_variables(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    id: String,
+    values: BTreeMap<String, String>,
+) -> Result<Value, String> {
+    command_window(&window)?;
+    update_collector_variables(&app, |workspace| workspace.configure_variables(&id, values))
+}
+
+#[tauri::command]
+pub fn set_collector_enabled(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    id: String,
+    enabled: bool,
+) -> Result<Value, String> {
+    command_window(&window)?;
+    update_collector_variables(&app, |workspace| {
+        workspace.set_collector_enabled(&id, enabled)
+    })
 }
 
 #[tauri::command]
@@ -1093,6 +1309,13 @@ fn plan_sources(
                         })
                         .map(|(alias, value)| (alias.clone(), value.clone())),
                 );
+            }
+            if !live
+                && definition
+                    .validate_required_variables(&source.settings)
+                    .is_err()
+            {
+                source.enabled = false;
             }
 
             let grants = definition
@@ -1361,7 +1584,7 @@ pub async fn test_collector(
                 response.result = None;
             }
         }
-        response.definition = Some(json!(project.manifest.definition));
+        response.definition = Some(project.manifest.definition.clone());
         let mut state = state.lock().map_err(|error| error.to_string())?;
         if response.result.is_some() && state.draft(&id)? == draft {
             project.fixture = json!({});
@@ -1663,6 +1886,7 @@ fn execute_with_state(
         return runner::isolated(request(project, inputs, at));
     }
     let definition = &project.manifest.definition;
+    definition.validate_required_variables(&instance.settings)?;
     if definition.permissions != instance.approved_permissions {
         return Err("模块的资源授权已变化，请重新发布并确认。".into());
     }
@@ -1902,6 +2126,7 @@ fn poll_sources(app: AppHandle) {
                 .get(&instance.id)
                 .is_none_or(|task| task.instance != *instance || task.revision != release.revision);
             if reset {
+                refresh_pending.remove(&instance.id);
                 tasks.insert(
                     instance.id.clone(),
                     Schedule {
@@ -2015,6 +2240,183 @@ mod tests {
             )]),
         };
         (catalog, id)
+    }
+
+    fn configuration_workspace() -> (tempfile::TempDir, Workspace, String, String) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::load(directory.path().join("collectors.json")).unwrap();
+        let (mut catalog, id) = variable_catalog();
+        let instance = catalog.instances.get_mut(&id).unwrap();
+        let module_id = instance.module_id.clone();
+        instance.settings.remove("PUBLIC_VALUE");
+        let module = catalog.modules.get_mut(&module_id).unwrap();
+        module.draft.definition =
+            r#"{"settings":{"DRAFT_KEY":{"label":"草稿", "required":true}}}"#.into();
+        let definition = &mut module
+            .released
+            .as_mut()
+            .unwrap()
+            .project
+            .manifest
+            .definition;
+        definition.settings = serde_json::from_str(
+            r#"{
+            "PUBLIC_VALUE": {"label":"仓库", "description":"填写 owner/repo", "required":true},
+            "API_TOKEN": {"label":"令牌", "secret":true},
+            "DEFAULT_VALUE": {"label":"默认值", "default":"preset", "required":false},
+            "legacy_option": {"label":"历史参数"}
+        }"#,
+        )
+        .unwrap();
+        workspace.save(catalog).unwrap();
+        (directory, workspace, module_id, id)
+    }
+
+    #[test]
+    fn configure_variables_uses_released_fields_in_order_and_hides_secrets() {
+        let (_directory, workspace, module_id, _) = configuration_workspace();
+        let form =
+            serde_json::to_value(workspace.collector_variables(&module_id).unwrap()).unwrap();
+        assert_eq!(form["fields"][0]["key"], "PUBLIC_VALUE");
+        assert_eq!(form["fields"][0]["description"], "填写 owner/repo");
+        assert_eq!(form["fields"][0]["required"], true);
+        assert_eq!(form["fields"][1]["key"], "API_TOKEN");
+        assert!(form["fields"][1].get("value").is_none());
+        assert_eq!(form["fields"][2]["value"], "preset");
+        assert_eq!(form["fields"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            form["configured"],
+            json!({"PUBLIC_VALUE":false,"API_TOKEN":true,"DEFAULT_VALUE":true})
+        );
+        assert!(!form.to_string().contains(VARIABLE_VALUE));
+    }
+
+    #[test]
+    fn configure_variables_requires_values_for_saving_enabling_and_live_collection() {
+        let (_directory, mut workspace, module_id, id) = configuration_workspace();
+        workspace.catalog.instances.get_mut(&id).unwrap().enabled = false;
+        assert!(workspace
+            .set_collector_enabled(&id, true)
+            .unwrap_err()
+            .contains("仓库"));
+        assert!(!workspace.catalog.instances[&id].enabled);
+        assert!(workspace
+            .configure_variables(&module_id, BTreeMap::new())
+            .unwrap_err()
+            .contains("仓库"));
+        let instance = &workspace.catalog.instances[&id];
+        let project = &workspace.catalog.modules[&module_id]
+            .released
+            .as_ref()
+            .unwrap()
+            .project;
+        let mut project_without_grants = project.clone();
+        project_without_grants
+            .manifest
+            .definition
+            .permissions
+            .clear();
+        let client = http_client().unwrap();
+        assert!(execute_live(project, instance, &client, 1000)
+            .err()
+            .unwrap()
+            .contains("仓库"));
+        let sources = plan_sources(
+            &project_without_grants,
+            Some(&project_without_grants),
+            &workspace.catalog,
+            false,
+        )
+        .unwrap()
+        .authorize(&project_without_grants, None)
+        .unwrap();
+        assert!(!sources[0].enabled);
+    }
+
+    #[test]
+    fn configure_variables_persists_updates_and_clears_optional_values() {
+        let (_directory, mut workspace, module_id, id) = configuration_workspace();
+        workspace.status.insert(
+            id.clone(),
+            Status {
+                error: Some("旧状态".into()),
+                ..Status::default()
+            },
+        );
+        let changed = workspace
+            .configure_variables(
+                &module_id,
+                BTreeMap::from([
+                    ("PUBLIC_VALUE".into(), "owner/repo".into()),
+                    ("API_TOKEN".into(), String::new()),
+                    ("DEFAULT_VALUE".into(), String::new()),
+                ]),
+            )
+            .unwrap();
+        assert_eq!(changed, id);
+        assert!(workspace.refresh.contains(&id));
+        let status = workspace.instance_status(&id).unwrap();
+        assert_eq!(status["error"], Value::Null);
+        assert!(!status.to_string().contains("owner/repo"));
+        let bytes = fs::read_to_string(&workspace.path).unwrap();
+        assert!(!bytes.contains("owner/repo"));
+        assert!(!bytes.contains(VARIABLE_VALUE));
+        let restarted = Workspace::load(workspace.path.clone()).unwrap();
+        let form = serde_json::to_value(restarted.collector_variables(&id).unwrap()).unwrap();
+        assert_eq!(form["fields"][0]["value"], "owner/repo");
+        assert_eq!(form["fields"][2]["value"], "");
+        assert_eq!(
+            form["configured"],
+            json!({"PUBLIC_VALUE":true,"API_TOKEN":false,"DEFAULT_VALUE":false})
+        );
+        assert_eq!(
+            restarted.catalog.instances[&id].settings["legacy_option"],
+            "legacy-text"
+        );
+    }
+
+    #[test]
+    fn configure_variables_rejects_unknown_keys_and_targets_one_instance() {
+        let (_directory, mut workspace, module_id, id) = configuration_workspace();
+        let mut second = workspace.catalog.instances[&id].clone();
+        second.id = "second".into();
+        second.enabled = false;
+        workspace
+            .catalog
+            .instances
+            .insert(second.id.clone(), second);
+        assert!(workspace.collector_variables(&module_id).is_err());
+        assert!(workspace
+            .configure_variables(
+                &id,
+                BTreeMap::from([
+                    ("PUBLIC_VALUE".into(), "owner/repo".into()),
+                    ("legacy_option".into(), "unexpected".into()),
+                ])
+            )
+            .is_err());
+        assert!(!workspace.catalog.instances[&id]
+            .settings
+            .contains_key("PUBLIC_VALUE"));
+        workspace
+            .configure_variables(
+                "second",
+                BTreeMap::from([("PUBLIC_VALUE".into(), "other/repo".into())]),
+            )
+            .unwrap();
+        workspace.set_collector_enabled("second", true).unwrap();
+        assert!(workspace.catalog.instances["second"].enabled);
+        assert_eq!(
+            workspace.catalog.instances["second"].settings["PUBLIC_VALUE"],
+            "other/repo"
+        );
+        assert_eq!(
+            workspace.catalog.instances["second"].settings["API_TOKEN"],
+            VARIABLE_VALUE
+        );
+        assert!(!workspace.catalog.instances[&id]
+            .settings
+            .contains_key("PUBLIC_VALUE"));
     }
 
     #[test]
@@ -2335,7 +2737,8 @@ mod tests {
         assert_eq!(migrated.files[&entry], old);
 
         let project = migrated.project(false).unwrap();
-        let inspected = runner::inspect_code(request(&project, Value::Null, 0)).unwrap();
+        let definition = runner::inspect_code(request(&project, Value::Null, 0)).unwrap();
+        let inspected: Value = serde_json::from_str(definition.get()).unwrap();
         assert_eq!(inspected["name"], "旧模块");
         let result = runner::evaluate(request(&project, json!({}), 0))
             .result
@@ -2364,7 +2767,8 @@ mod tests {
         assert_eq!(migrated.files.len(), 65);
         assert_ne!(migrated.entry, "src/collector.mjs");
         let project = migrated.project(false).unwrap();
-        let inspected = runner::inspect_code(request(&project, Value::Null, 0)).unwrap();
+        let definition = runner::inspect_code(request(&project, Value::Null, 0)).unwrap();
+        let inspected: Value = serde_json::from_str(definition.get()).unwrap();
         assert_eq!(inspected["settings"]["__proto__"]["default"], "value");
     }
 

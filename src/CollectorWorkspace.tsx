@@ -6,7 +6,8 @@ import { Input } from './components/ui/input'
 import { CollectorCode } from './CollectorCode'
 import { CollectorFiles, projectItems, samplePath } from './CollectorFiles'
 import { CollectorAuthorization, CollectorCodexSettings } from './CollectorAuthorization'
-import { cancelCollectorAction, createDraft, exportModule, focusLayout, getCatalog, getDraft, getGrantRequests, importModule, inspectImport, publishDraft, readDefinition, runCollectorAction, saveDraft, testDraft, type Approval, type Catalog, type Draft, type GrantRequest, type ImportReview, type TestResult } from './collectorApi'
+import { CollectorVariableForm } from './CollectorVariableForm'
+import { cancelCollectorAction, createDraft, exportModule, focusLayout, getCatalog, getCollectorVariables, getDraft, getGrantRequests, importModule, inspectImport, publishDraft, readDefinition, runCollectorAction, saveCollectorVariables, saveDraft, setCollectorEnabled, testDraft, type Approval, type Catalog, type CollectorVariables, type Draft, type GrantRequest, type ImportReview, type TestResult } from './collectorApi'
 import { WidgetReading } from './WidgetReading'
 import type { Reading, Widget } from './layout'
 import './collector.css'
@@ -48,9 +49,13 @@ export function CollectorWorkspace() {
   const [jumpLine, setJumpLine] = useState<number>()
   const [resultView, setResultView] = useState<'preview' | 'output' | 'sample'>('preview')
   const [grantPrompt, setGrantPrompt] = useState<{ requests: GrantRequest[]; live: boolean; confirm: (approval?: Approval) => void }>()
+  const [variableForm, setVariableForm] = useState<{ id: string; variables: CollectorVariables }>()
+  const [variableChanges, setVariableChanges] = useState<Record<string, string>>({})
   const testedApproval = useRef<{ draft: Draft; approval: Approval } | undefined>(undefined)
   const [showCodexSettings, setShowCodexSettings] = useState(false)
   const module = catalog?.modules.find(module => module.id === draft?.id)
+  const variableInstances = module?.variableInstances ?? []
+  const variableInstance = variableInstances.find(instance => instance.id === variableForm?.id)
   const readOnly = module?.builtIn === true
   const editorDraft = draft && resultDraft?.id === draft.id ? { ...draft, definition: resultDraft.definition } : draft
   const definition = readDefinition(editorDraft?.definition ?? '')
@@ -78,6 +83,46 @@ export function CollectorWorkspace() {
       setCatalog(await getCatalog())
     } catch (reason) {
       setError(String(reason))
+    }
+  }
+
+  function closeVariables() {
+    setVariableForm(undefined)
+    setVariableChanges({})
+  }
+
+  async function openVariables(id: string) {
+    setBusy('variables')
+    setError('')
+    setNotice('')
+    try {
+      setVariableForm({ id, variables: await getCollectorVariables(id) })
+      setVariableChanges({})
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function updateVariables(id: string, enabled?: boolean) {
+    setBusy('variables')
+    setError('')
+    setNotice('')
+    try {
+      if (enabled === undefined) {
+        await saveCollectorVariables(id, variableChanges)
+        setVariableChanges({})
+        setVariableForm({ id, variables: await getCollectorVariables(id) })
+      } else {
+        await setCollectorEnabled(id, enabled)
+      }
+      setCatalog(await getCatalog())
+      setNotice(enabled === undefined ? '变量已保存。' : enabled ? '已启用采集。' : '已停用采集。')
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      setBusy('')
     }
   }
 
@@ -134,6 +179,7 @@ export function CollectorWorkspace() {
   }
 
   function adopt(next: Draft) {
+    closeVariables()
     draftRef.current = next
     savedRef.current = next
     setDraft(next)
@@ -195,6 +241,7 @@ export function CollectorWorkspace() {
         adopt(await getDraft(result.draft.id))
         setNotice('已打开相同的模块。')
       } else if (result) {
+        closeVariables()
         setCreating(false)
         setImporting(result)
       }
@@ -289,6 +336,7 @@ export function CollectorWorkspace() {
       const authorization = await requestApproval(draft, { restore })
       if (!authorization.accepted) return
       setCatalog(await publishDraft(draft.id, restore, authorization.approval))
+      closeVariables()
       testedApproval.current = undefined
       setTestedDraft(undefined)
       setNotice(restore ? '已恢复上一发布版本。' : '已发布，可在屏幕布局选择这个采集器的卡片。')
@@ -392,7 +440,7 @@ export function CollectorWorkspace() {
       <h1>数据采集器</h1>
       <div className="collector-actions">
         <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void chooseImport()}><Download size={15} />导入模块</Button>
-        <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => { setCreating(true); setImporting(undefined); setError('') }}>
+        <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => { closeVariables(); setCreating(true); setImporting(undefined); setError('') }}>
           <Plus size={16} />新建采集器
         </Button>
       </div>
@@ -452,6 +500,8 @@ export function CollectorWorkspace() {
               <span>{module.builtIn ? '自带 · 可试跑' : module.revision == null ? '本地草稿'
                 : '已发布 · 版本 ' + module.revision + (catalog.status[module.id]?.updatedAt && !catalog.status[module.id]?.error ? ' · 采集正常' : '')}</span></div>
             <div className="collector-actions">
+              {variableInstances.length > 0 && <Button size="sm" variant="outline" aria-expanded={Boolean(variableInstance)} disabled={Boolean(busy)}
+                onClick={() => variableInstance ? closeVariables() : void openVariables(variableInstances[0].id)}>配置变量</Button>}
               {!readOnly && module.revision != null && <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void saveExport()} title="导出发布版本"><Upload size={14} />导出</Button>}
               {module.canRestore && <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void publish(true)} title="恢复上一发布版本"><RotateCcw size={14} />恢复</Button>}
               {module.id === 'codex' && <Button size="sm" variant="ghost" onClick={() => setShowCodexSettings(true)}><Settings2 size={14} />连接设置</Button>}
@@ -468,6 +518,16 @@ export function CollectorWorkspace() {
               </Button>}
             </div>
           </div>
+          {variableForm && variableInstance && <section className="collector-variables" aria-label="配置变量">
+            {variableInstances.length > 1 && <label className="collector-variable-instance">采集实例
+              <select value={variableInstance.id} disabled={Boolean(busy)} onChange={event => void openVariables(event.target.value)}>
+                {variableInstances.map(instance => <option key={instance.id} value={instance.id}>{instance.name}</option>)}
+              </select>
+            </label>}
+            <CollectorVariableForm variables={variableForm.variables} changes={variableChanges} busy={Boolean(busy)} enabled={variableInstance.enabled}
+              onChange={setVariableChanges} onSave={() => void updateVariables(variableInstance.id)} onClose={closeVariables}
+              onToggle={() => void updateVariables(variableInstance.id, !variableInstance.enabled)} />
+          </section>}
             <div className="collector-workbench">
               <aside className="collector-files">
                 <div className="collector-files-head"><strong>项目文件</strong>{!readOnly && <div>
