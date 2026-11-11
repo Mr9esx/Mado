@@ -59,6 +59,10 @@ pub fn projects() -> &'static [Project] {
                 &[(
                     "index.mjs",
                     include_str!("../../../shared/collectors/system/index.mjs"),
+                ),
+                (
+                    "projection.mjs",
+                    include_str!("../../../shared/collectors/system/projection.mjs"),
                 )],
                 json!({ "calls": [{ "operation": "system", "alias": "system", "params": {},
                 "result": { "cpuUsagePercent": 68, "memoryUsedBytes": 8_589_934_592_u64, "memoryTotalBytes": 17_179_869_184_u64, "memoryAvailableBytes": 8_589_934_592_u64, "systemDiskUsedPercent": 43.2, "networkReceivedBytes": 1000, "networkTransmittedBytes": 500, "uptimeSeconds": 14400 } }] }),
@@ -120,6 +124,47 @@ mod binding_tests {
         assert!(project.manifest.definition.outputs.contains_key("systemDisk"));
         assert!(project.manifest.definition.outputs.contains_key("downloadRate"));
         assert!(project.manifest.definition.outputs.contains_key("uploadRate"));
+    }
+
+    #[test]
+    fn bundled_system_collector_resolves_projection_and_collects_outputs() {
+        use crate::collector::runner::{self, Request};
+        use serde_json::{json, Value};
+
+        let project = super::get("system").unwrap();
+        let result = runner::evaluate_with(
+            Request {
+                entry: project.manifest.entry.clone(),
+                files: project.files.clone(),
+                inputs: json!({}),
+                private_settings: vec![],
+                sampled_at: 10_000,
+                action: None,
+                state: Value::Null,
+            },
+            |call| {
+                assert_eq!(call.operation, "system");
+                Ok(json!({
+                    "cpuUsagePercent": 25.0,
+                    "memoryUsedBytes": 4 * 1024_u64.pow(3),
+                    "memoryTotalBytes": 8 * 1024_u64.pow(3),
+                    "memoryAvailableBytes": 4 * 1024_u64.pow(3),
+                    "systemDiskUsedPercent": 50.0,
+                    "networkReceivedBytes": 1000,
+                    "networkTransmittedBytes": 2000,
+                    "uptimeSeconds": 3600,
+                }))
+            },
+        );
+
+        let collected = result
+            .result
+            .unwrap_or_else(|| panic!("bundled collector should execute: {:?}", result.error));
+        assert_eq!(collected.outputs["cpuUsage"]["value"], 25.0);
+        assert_eq!(collected.outputs["systemDisk"]["ratio"], 0.5);
+        assert_eq!(collected.outputs["downloadRate"], Value::Null);
+        assert_eq!(collected.state["network"]["receivedBytes"], 1000);
+        assert!(result.error.is_none());
     }
 
     #[test]
