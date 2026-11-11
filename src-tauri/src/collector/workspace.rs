@@ -1,8 +1,8 @@
 use super::{
     builtin, io,
     model::{
-        path_valid, BindingHint, Definition, History, Manifest, Permission, Project, Setting,
-        MAX_FILES, MAX_PROJECT,
+        path_valid, BindingHint, History, Manifest, Permission, Project, Setting, MAX_FILES,
+        MAX_PROJECT,
     },
     now, runner, vault::KeyStore,
 };
@@ -204,18 +204,36 @@ struct Module {
 }
 
 impl Module {
-    fn validate_variable_defaults(&self) -> Result<(), String> {
-        if let Ok(definition) = serde_json::from_str::<Definition>(&self.draft.definition) {
-            definition.validate_variable_defaults()?;
-        }
-        for release in self.released.iter().chain(&self.previous) {
+    fn has_variable_defaults(&self) -> bool {
+        let release_has_defaults = self.released.iter().chain(&self.previous).any(|release| {
             release
                 .project
                 .manifest
                 .definition
-                .validate_variable_defaults()?;
+                .settings
+                .values()
+                .any(|setting| setting.is_variable() && !setting.default.is_empty())
+        });
+        if release_has_defaults {
+            return true;
         }
-        Ok(())
+        // Drafts can have valid JSON settings without a valid module definition.
+        let Ok(definition) = serde_json::from_str::<Value>(&self.draft.definition) else {
+            return false;
+        };
+        definition
+            .get("settings")
+            .and_then(Value::as_object)
+            .is_some_and(|settings| {
+                settings.values().any(|setting| {
+                    ["description", "required", "secret"]
+                        .iter()
+                        .any(|key| setting.get(*key).is_some_and(|value| !value.is_null()))
+                        && setting
+                            .get("default")
+                            .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+                })
+            })
     }
 }
 
@@ -240,9 +258,15 @@ struct Catalog<T = String> {
 
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
-enum StoredSetting {
-    Plain(String),
+enum Stored<T> {
+    Plain(T),
     Encrypted { ciphertext: String },
+}
+
+#[derive(Deserialize, Serialize)]
+struct StoredCatalog {
+    modules: BTreeMap<String, Stored<Module>>,
+    instances: BTreeMap<String, Instance<Stored<String>>>,
 }
 
 impl<T> Catalog<T> {
@@ -349,15 +373,36 @@ impl Workspace {
         let directory = path.parent().ok_or("找不到采集器配置目录。")?;
         let mut catalog = match fs::read(&path) {
             Ok(bytes) => {
-                let stored: Catalog<StoredSetting> =
+                let stored: StoredCatalog =
                     serde_json::from_slice(&bytes).map_err(|_| "采集器配置文件格式无效。")?;
-                stored.map_settings(|variable, value| match value {
-                    StoredSetting::Plain(value) => Ok(Some(value)),
-                    StoredSetting::Encrypted { ciphertext } => {
-                        if key.is_none() {
-                            key = Some(KeyStore::load(directory)?);
-                        }
-                        let value = key.as_ref().unwrap().decrypt(&ciphertext)?;
+                let mut open = |ciphertext: String| -> Result<String, String> {
+                    if key.is_none() {
+                        key = Some(KeyStore::load(directory)?);
+                    }
+                    key.as_ref().unwrap().decrypt(&ciphertext)
+                };
+                let modules = stored
+                    .modules
+                    .into_iter()
+                    .map(|(id, module)| {
+                        let module = match module {
+                            Stored::Plain(module) => module,
+                            Stored::Encrypted { ciphertext } => {
+                                serde_json::from_str(&open(ciphertext)?)
+                                    .map_err(|_| "加密的采集器模块格式无效。")?
+                            }
+                        };
+                        Ok::<_, String>((id, module))
+                    })
+                    .collect::<Result<_, _>>()?;
+                let catalog = Catalog {
+                    modules,
+                    instances: stored.instances,
+                };
+                catalog.map_settings(|variable, value| match value {
+                    Stored::Plain(value) => Ok(Some(value)),
+                    Stored::Encrypted { ciphertext } => {
+                        let value = open(ciphertext)?;
                         // An upgrade can remove a bundled variable. Never
                         // turn its old ciphertext into an ordinary setting.
                         Ok(variable.then_some(value))
@@ -440,21 +485,44 @@ impl Workspace {
         }
         let mut stored = next.clone();
         stored.modules.retain(|id, _| builtin::get(id).is_none());
-        for module in stored.modules.values() {
-            module.validate_variable_defaults()?;
-        }
-        let mut has_variables = false;
-        let stored = stored.map_settings(|variable, value| {
-            if !variable {
-                return Ok(Some(StoredSetting::Plain(value)));
-            }
+        let mut has_encrypted_values = false;
+        let mut seal = |value: &str| -> Result<String, String> {
             if self.key.is_none() {
                 self.key = Some(KeyStore::load_or_create(directory)?);
             }
-            has_variables = true;
-            let ciphertext = self.key.as_ref().unwrap().encrypt(&value)?;
-            Ok(Some(StoredSetting::Encrypted { ciphertext }))
+            has_encrypted_values = true;
+            self.key.as_ref().unwrap().encrypt(value)
+        };
+        let stored = stored.map_settings(|variable, value| {
+            Ok(Some(if variable {
+                Stored::Encrypted {
+                    ciphertext: seal(&value)?,
+                }
+            } else {
+                Stored::Plain(value)
+            }))
         })?;
+        let modules = stored
+            .modules
+            .into_iter()
+            .map(|(id, module)| {
+                let module = if module.has_variable_defaults() {
+                    // The draft and source files can repeat the manifest value.
+                    let serialized =
+                        serde_json::to_string(&module).map_err(|_| "无法序列化采集器模块。")?;
+                    Stored::Encrypted {
+                        ciphertext: seal(&serialized)?,
+                    }
+                } else {
+                    Stored::Plain(module)
+                };
+                Ok::<_, String>((id, module))
+            })
+            .collect::<Result<_, _>>()?;
+        let stored = StoredCatalog {
+            modules,
+            instances: stored.instances,
+        };
         let mut temp =
             tempfile::NamedTempFile::new_in(directory).map_err(|error| error.to_string())?;
         serde_json::to_writer(&mut temp, &stored).map_err(|error| error.to_string())?;
@@ -463,7 +531,7 @@ impl Workspace {
             .map_err(|error| error.to_string())?;
         temp.persist(&self.path)
             .map_err(|error| error.to_string())?;
-        if !has_variables {
+        if !has_encrypted_values {
             self.key = None;
         }
         self.catalog = next;
@@ -1991,7 +2059,7 @@ mod tests {
     }
 
     #[test]
-    fn variable_defaults_cannot_be_written_to_the_catalog() {
+    fn variable_defaults_are_encrypted_and_restored_with_the_catalog() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("collectors.json");
         let mut workspace = Workspace::load(path.clone()).unwrap();
@@ -2001,62 +2069,124 @@ mod tests {
         let module_id = instance.module_id.clone();
         let module = catalog.modules.get_mut(&module_id).unwrap();
         let release = module.released.as_mut().unwrap();
-        release
-            .project
-            .manifest
-            .definition
-            .settings
-            .get_mut("legacy_option")
-            .unwrap()
-            .default = "legacy-default".into();
-        module.draft = Draft::from_project(&release.project);
-        workspace.save(catalog.clone()).unwrap();
+        let definitions = &mut release.project.manifest.definition.settings;
+        definitions.get_mut("legacy_option").unwrap().default = "legacy-default".into();
+        definitions.get_mut("API_TOKEN").unwrap().default = "release-default-token".into();
 
-        let secret_default = "private-default-token";
-        let module = &catalog.modules[&module_id];
-        let mut invalid_release = module.released.clone().unwrap();
-        invalid_release
+        let mut previous = release.clone();
+        previous
             .project
             .manifest
             .definition
             .settings
             .get_mut("API_TOKEN")
             .unwrap()
-            .default = secret_default.into();
-        for invalid_module in [
-            Module {
-                draft: Draft::from_project(&invalid_release.project),
-                ..module.clone()
-            },
-            Module {
-                released: Some(invalid_release.clone()),
-                ..module.clone()
-            },
-            Module {
-                previous: Some(invalid_release),
-                ..module.clone()
-            },
-        ] {
-            let mut next = catalog.clone();
-            next.modules.insert(module_id.clone(), invalid_module);
-            let error = workspace.save(next).unwrap_err();
-            assert!(error.contains("默认值"));
-            assert!(!error.contains(secret_default));
-        }
-        assert!(!fs::read_to_string(&path).unwrap().contains(secret_default));
-        let restarted = Workspace::load(path).unwrap();
-        let project = &restarted.catalog.modules[&module_id]
-            .released
-            .as_ref()
+            .default = "previous-default-token".into();
+        let mut draft_project = release.project.clone();
+        draft_project
+            .manifest
+            .definition
+            .settings
+            .get_mut("API_TOKEN")
             .unwrap()
-            .project;
+            .default = "draft-default-token".into();
+        draft_project
+            .files
+            .values_mut()
+            .next()
+            .unwrap()
+            .push_str("\n// author source includes draft-default-token");
+        module.draft = Draft::from_project(&draft_project);
+        module.previous = Some(previous);
+
+        workspace.save(catalog.clone()).unwrap();
+        let bytes = fs::read_to_string(&path).unwrap();
+        for default in [
+            "draft-default-token",
+            "release-default-token",
+            "previous-default-token",
+        ] {
+            assert!(!bytes.contains(default));
+        }
+        assert!(bytes.contains("/path/to/authorized.json"));
+
+        let mut restarted = Workspace::load(path.clone()).unwrap();
+        let module = &restarted.catalog.modules[&module_id];
+        assert_eq!(module.draft, catalog.modules[&module_id].draft);
+        let project = &module.released.as_ref().unwrap().project;
         let settings = io::settings(
             &project.manifest.definition,
             &restarted.catalog.instances[&id].settings,
         )
         .unwrap();
-        assert_eq!(settings["API_TOKEN"], "");
+        assert_eq!(settings["API_TOKEN"], "release-default-token");
         assert_eq!(settings["legacy_option"], "legacy-default");
+        let result = runner::evaluate(request(project, settings, 1000))
+            .result
+            .unwrap();
+        assert_eq!(result.outputs["reading"]["value"], 21);
+        assert_eq!(
+            module
+                .previous
+                .as_ref()
+                .unwrap()
+                .project
+                .manifest
+                .definition
+                .settings["API_TOKEN"]
+                .default,
+            "previous-default-token"
+        );
+
+        let mut next = restarted.catalog.clone();
+        next.instances
+            .get_mut(&id)
+            .unwrap()
+            .settings
+            .insert("API_TOKEN".into(), VARIABLE_VALUE.into());
+        restarted.save(next).unwrap();
+        let bytes = fs::read_to_string(&path).unwrap();
+        assert!(!bytes.contains(VARIABLE_VALUE));
+        let reopened = Workspace::load(path.clone()).unwrap();
+        assert_eq!(
+            reopened.catalog.instances[&id].settings["API_TOKEN"],
+            VARIABLE_VALUE
+        );
+
+        let key_path = directory.path().join(VARIABLE_KEY);
+        fs::remove_file(&key_path).unwrap();
+        assert!(Workspace::load(path.clone())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("密钥"));
+        assert!(!key_path.exists());
+        assert_eq!(fs::read_to_string(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn variable_defaults_in_incomplete_drafts_are_encrypted_without_blocking_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("collectors.json");
+        let mut workspace = Workspace::load(path.clone()).unwrap();
+        let (mut catalog, id) = variable_catalog();
+        let module_id = catalog.instances.remove(&id).unwrap().module_id;
+        let module = catalog.modules.get_mut(&module_id).unwrap();
+        module.released = None;
+        let definition =
+            r#"{"settings":{"API_TOKEN":{"secret":true,"default":"incomplete-draft-token"}}}"#;
+        module.draft.definition = definition.into();
+        assert!(module.draft.project(false).is_err());
+
+        workspace.save(catalog).unwrap();
+        assert!(!fs::read_to_string(&path)
+            .unwrap()
+            .contains("incomplete-draft-token"));
+        let restarted = Workspace::load(path).unwrap();
+        assert_eq!(
+            restarted.catalog.modules[&module_id].draft.definition,
+            definition
+        );
     }
 
     #[test]

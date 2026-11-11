@@ -35,7 +35,7 @@
 | `ModuleManifest` 字段 | 由谁管理 | 规则 |
 | --- | --- | --- |
 | `name` | 作者 | 模块显示名称，允许改名。 |
-| `settings` | 作者 | 可选。每项须有 `label`，普通文本参数可另填 `default`。包含 `description`、`required` 或 `secret` 的参数是采集器变量，值由用户按实例配置，`default` 须省略或留空。 |
+| `settings` | 作者 | 可选。每项须有 `label`，可填 `default`。包含 `description`、`required` 或 `secret` 的参数是采集器变量。Studio 加密保存变量默认值及用户按实例配置的值。 |
 | `permissions` | 作者 | 可选。按别名声明宿主资源与允许的操作，在试跑或发布时确认实际资源和授权范围。 |
 | `resources` | 作者 | 可选。以资源别名为键，填写 HTTP 地址或已知的本机路径。新项目在这里填写 HTTP 地址。省略本机路径时，授权流程会请用户选择资源。 |
 | `schedule` | 作者 | 新项目使用 `{ refreshSeconds, enabled }`。采集间隔为 5–3600 秒，设 `enabled: false` 后发布可暂停采集。 |
