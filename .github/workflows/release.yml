@@ -10,10 +10,19 @@ on:
         required: true
         type: string
       platform:
-        description: Installer to rebuild
+        description: Installer to rebuild, or publish completed artifacts
         required: true
         type: choice
-        options: [macos-arm64, macos-x64, windows-x64, linux-x64]
+        options: [macos-arm64, macos-x64, windows-x64, linux-x64, publish]
+      base_run:
+        description: Run with Intel Mac, Windows and firmware artifacts (publish only)
+        type: string
+      mac_run:
+        description: Run with the Apple silicon artifact (publish only)
+        type: string
+      linux_run:
+        description: Run with the Linux artifacts (publish only)
+        type: string
 
 permissions:
   contents: read
@@ -24,6 +33,7 @@ concurrency:
 jobs:
   desktop:
     name: Desktop (${{ matrix.platform }})
+    if: inputs.platform != 'publish'
     strategy:
       fail-fast: false
       matrix:
@@ -141,22 +151,57 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    if: github.event_name == 'push'
+    if: always() && (inputs.platform == 'publish' || (github.event_name == 'push' && needs.desktop.result == 'success' && needs.firmware.result == 'success'))
     needs: [desktop, firmware]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/download-artifact@v7
+        if: github.event_name == 'push'
         with:
           path: release
           merge-multiple: true
+      - name: Check recovery run IDs
+        if: inputs.platform == 'publish'
+        env:
+          BASE_RUN: ${{ inputs.base_run }}
+          MAC_RUN: ${{ inputs.mac_run }}
+          LINUX_RUN: ${{ inputs.linux_run }}
+        run: |
+          for id in "$BASE_RUN" "$MAC_RUN" "$LINUX_RUN"; do
+            [[ "$id" =~ ^[0-9]+$ ]] || { echo 'Recovery run IDs must be numeric'; exit 1; }
+          done
+      - uses: actions/download-artifact@v7
+        if: inputs.platform == 'publish'
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.base_run }}
+          pattern: '{macos-x64,windows-x64,firmware}'
+          path: release
+          merge-multiple: true
+      - uses: actions/download-artifact@v7
+        if: inputs.platform == 'publish'
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.mac_run }}
+          name: macos-arm64
+          path: release
+      - uses: actions/download-artifact@v7
+        if: inputs.platform == 'publish'
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.linux_run }}
+          name: linux-x64
+          path: release
       - name: Publish installers and firmware together
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           cd release
-          tag="$GITHUB_REF_NAME"
+          tag="$RELEASE_TAG"
           assets=(
             "mado-studio-$tag-macos-arm64.dmg"
             "mado-studio-$tag-macos-x64.dmg"
