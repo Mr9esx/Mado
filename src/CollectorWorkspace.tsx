@@ -497,10 +497,16 @@ export function CollectorWorkspace() {
         <h2 className="collector-nav-heading">模块</h2>
         {catalog?.modules.map(item => {
           const Icon = item.id === 'system' ? Cpu : item.builtIn ? Terminal : Braces
+          const collectionFailed = item.variableInstances.some(instance => instance.enabled && instance.error)
+            || (!item.allowsMultipleInstances && Boolean(catalog.status[item.id]?.error))
           return <Button autoHeight size="xs" variant="ghost" key={item.id} type="button" className="collector-module" data-active={!creating && item.id === draft?.id}
             onClick={() => void selectModule(item.id)} disabled={Boolean(busy)}>
             <Icon size={16} aria-hidden="true" />
-            <span><strong>{item.name}</strong><small>{item.builtIn ? '内置' : item.revision == null ? '未发布' : item.changed ? '已发布 · 有草稿' : '已发布'}</small></span>
+            <span><strong>{item.name}</strong><small>
+              {item.builtIn ? '内置' : item.revision == null ? '未发布' : item.changed ? '已发布 · 有草稿' : '已发布'}
+              {item.trialFailed && <span className="collector-error"> · 试跑失败</span>}
+              {collectionFailed && <span className="collector-error"> · 采集异常</span>}
+            </small></span>
             <ChevronRight size={13} aria-hidden="true" />
           </Button>
         })}
@@ -541,6 +547,7 @@ export function CollectorWorkspace() {
             <Button type="submit" size="sm" disabled={!name.trim() || Boolean(busy)}>打开工作区<ArrowRight size={15} /></Button>
           </div>
         </form> : draft && module && catalog ? <>
+          {test?.error && <div className="collector-banner collector-error" role="status"><CircleAlert size={16} />试跑失败，请查看下方试跑结果。</div>}
           {!module.allowsMultipleInstances && catalog.status[module.id]?.error && <div className="collector-banner collector-error" role="status">{catalog.status[module.id].error}</div>}
           <div className="collector-workbar">
             <div>

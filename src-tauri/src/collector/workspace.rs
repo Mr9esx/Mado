@@ -10,7 +10,7 @@ use crate::{device::Device, SNAPSHOT_EVENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -107,7 +107,7 @@ impl Draft {
             })
             .unwrap_or_else(|_| self.definition.clone());
         let source = format!(
-            "import {{ defineModule }} from '@mado/sdk'\nimport previous from {original}\n\nexport default defineModule({{{}\n  collect: previous.collect,\n  handlers: previous.handlers,\n}})\n",
+            "import {{ defineModule }} from '@mado/sdk'\nimport previous from {original}\n\nexport default defineModule({{{}\n  collect: previous.collect,\n  collectBatch: previous.collectBatch,\n  handlers: previous.handlers,\n}})\n",
             definition_members(&metadata)
         );
         self.files.insert(entry.clone(), source);
@@ -207,6 +207,19 @@ struct Module {
 }
 
 impl Module {
+    fn name(&self) -> String {
+        self.released
+            .as_ref()
+            .map(|release| release.project.manifest.definition.name.clone())
+            .or_else(|| {
+                serde_json::from_str::<Value>(&self.draft.definition)
+                    .ok()
+                    .and_then(|definition| definition["name"].as_str().map(str::to_owned))
+            })
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "未命名采集器".into())
+    }
+
     fn has_variable_defaults(&self) -> bool {
         let release_has_defaults = self.released.iter().chain(&self.previous).any(|release| {
             release
@@ -329,6 +342,7 @@ pub struct Workspace {
     catalog: Catalog,
     key: Option<KeyStore>,
     tested: BTreeMap<String, (Draft, Project)>,
+    failed_trials: BTreeSet<String>,
     status: BTreeMap<String, Status>,
     interactions: BTreeMap<String, Interaction>,
     refresh: std::collections::BTreeSet<String>,
@@ -363,6 +377,7 @@ pub struct ModuleSummary {
     action_instance: Option<String>,
     active_action: Option<String>,
     allows_multiple_instances: bool,
+    trial_failed: bool,
     variable_instances: Vec<VariableInstance>,
 }
 
@@ -398,6 +413,12 @@ struct VariableField {
 pub struct WorkspaceView {
     modules: Vec<ModuleSummary>,
     status: BTreeMap<String, Status>,
+}
+
+#[derive(Serialize)]
+pub struct CollectorFailures {
+    trials: Vec<String>,
+    instances: Vec<String>,
 }
 
 impl Workspace {
@@ -504,6 +525,7 @@ impl Workspace {
             catalog,
             key,
             tested: BTreeMap::new(),
+            failed_trials: BTreeSet::new(),
             status: BTreeMap::new(),
             interactions: BTreeMap::new(),
             refresh: Default::default(),
@@ -876,19 +898,7 @@ impl Workspace {
                 };
                 ModuleSummary {
                     id: module.draft.id.clone(),
-                    name: module
-                        .released
-                        .as_ref()
-                        .map(|release| release.project.manifest.definition.name.clone())
-                        .or_else(|| {
-                            serde_json::from_str::<Value>(&module.draft.definition)
-                                .ok()
-                                .and_then(|definition| {
-                                    definition["name"].as_str().map(str::to_owned)
-                                })
-                        })
-                        .filter(|name| !name.trim().is_empty())
-                        .unwrap_or_else(|| "未命名采集器".into()),
+                    name: module.name(),
                     built_in,
                     revision: module.released.as_ref().map(|release| release.revision),
                     can_restore: module.previous.is_some(),
@@ -906,6 +916,7 @@ impl Workspace {
                         .and_then(|id| self.interactions.get(id).map(|action| action.name.clone())),
                     action_instance,
                     allows_multiple_instances,
+                    trial_failed: self.failed_trials.contains(&module.draft.id),
                     variable_instances,
                 }
             })
@@ -931,6 +942,37 @@ impl Workspace {
             .map(|module| module.draft.clone())
             .ok_or("找不到采集模块。".into())
     }
+}
+
+#[tauri::command]
+pub fn collector_failures(
+    window: tauri::WebviewWindow,
+    state: State<'_, Mutex<Workspace>>,
+) -> Result<CollectorFailures, String> {
+    if window.label() != "main" {
+        return Err("请从主窗口读取采集错误摘要。".into());
+    }
+    let workspace = state.lock().map_err(|error| error.to_string())?;
+    Ok(CollectorFailures {
+        trials: workspace
+            .failed_trials
+            .iter()
+            .filter_map(|id| workspace.catalog.modules.get(id).map(Module::name))
+            .collect(),
+        instances: workspace
+            .catalog
+            .instances
+            .values()
+            .filter(|instance| {
+                instance.enabled
+                    && workspace
+                        .status
+                        .get(&instance.id)
+                        .is_some_and(|status| status.error.is_some())
+            })
+            .map(|instance| instance.name.clone())
+            .collect(),
+    })
 }
 
 #[tauri::command]
@@ -1337,6 +1379,7 @@ pub fn manage_collector_instance(
         SNAPSHOT_EVENT,
         crate::display_wire::local_snapshot(&snapshot),
     );
+    let _ = app.emit(STATUS_EVENT, &id);
     Ok(id)
 }
 
@@ -1793,9 +1836,11 @@ pub async fn test_collector(
     approval: Option<Approval>,
 ) -> Result<runner::ResultData, String> {
     command_window(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let id = target.id.clone();
+    let runner_app = app.clone();
+    let result: Result<runner::ResultData, String> = tauri::async_runtime::spawn_blocking(move || {
         let id = target.id.clone();
-        let state = app.state::<Mutex<Workspace>>();
+        let state = runner_app.state::<Mutex<Workspace>>();
         let draft = {
             let mut state = state.lock().map_err(|error| error.to_string())?;
             state.tested.remove(&id);
@@ -1872,7 +1917,24 @@ pub async fn test_collector(
         Ok(response)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+    .and_then(|response| response);
+    let state = app.state::<Mutex<Workspace>>();
+    let mut workspace = state.lock().map_err(|error| error.to_string())?;
+    let failed = match &result {
+        Ok(response) => response.error.is_some(),
+        Err(_) => true,
+    };
+    let changed = if failed {
+        workspace.failed_trials.insert(id.clone())
+    } else {
+        workspace.failed_trials.remove(&id)
+    };
+    drop(workspace);
+    if changed {
+        let _ = app.emit(STATUS_EVENT, &id);
+    }
+    result
 }
 
 #[tauri::command]
@@ -1966,6 +2028,7 @@ pub fn publish_collector(
     }
     *device = staged;
     let _ = app.emit(SNAPSHOT_EVENT, crate::display_wire::local_snapshot(&device.snapshot()));
+    let _ = app.emit(STATUS_EVENT, &id);
     Ok(workspace.view())
 }
 
@@ -3280,6 +3343,17 @@ mod tests {
             .result
             .unwrap();
         assert_eq!(result.outputs["reading"]["value"], 83);
+    }
+
+    #[test]
+    fn migration_preserves_bilibili_batch_entry() {
+        let migrated = Draft::from_project(builtin::get("bilibili").unwrap())
+            .migrate()
+            .unwrap();
+        let project = migrated.project(true).unwrap();
+        let definition = runner::inspect_code(request(&project, Value::Null, 0)).unwrap();
+        let inspected: Definition = serde_json::from_str(definition.get()).unwrap();
+        assert!(inspected.collects_in_batch());
     }
 
     #[test]

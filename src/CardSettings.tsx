@@ -11,11 +11,12 @@ const stateIcons: Record<string, DeviceIconName> = {
   running: 'play', completed: 'check-one', interrupted: 'forbid', error: 'attention', unknown: 'help',
 }
 
-export function CardSettings({ item, widget, theme, currentValue, fits, onChange, onPlay }: {
-  item: LayoutItem; widget: Widget; theme: DisplayTheme; fits: (item: LayoutItem) => boolean
+export function CardSettings({ item, widget, theme, currentValue, resolveSize, onChange, onPlay }: {
+  item: LayoutItem; widget: Widget; theme: DisplayTheme; resolveSize: (item: LayoutItem) => LayoutItem | undefined
   currentValue?: WidgetValue | null; onChange: (item: LayoutItem) => void; onPlay: (trial: CardTrial) => void
 }) {
   const states = Object.entries(widget.stateLabels ?? {})
+  const sizes = widget.sizes.map(([w, h]) => ({ w, h, target: resolveSize({ ...item, w, h }) }))
   const [state, setState] = useState(states[0]?.[0] ?? '')
   const [from, setFrom] = useState('80')
   const [to, setTo] = useState('90')
@@ -52,14 +53,16 @@ export function CardSettings({ item, widget, theme, currentValue, fits, onChange
       <fieldset>
         <legend>规格（行 × 列）</legend>
         <div className="display-card-options">
-          {widget.sizes.map(([w, h]) => <Button key={`${w}x${h}`} size="xs" variant="outline"
-            aria-pressed={item.w === w && item.h === h} disabled={!fits({ ...item, w, h })}
-            onClick={() => onChange({ ...item, w, h })}>{h} × {w}</Button>)}
+          {sizes.map(({ w, h, target }) => <Button key={`${w}x${h}`} size="xs" variant="outline"
+            aria-pressed={item.w === w && item.h === h} disabled={!target}
+            onClick={() => { if (target) onChange(target) }}>{h} × {w}</Button>)}
         </div>
       </fieldset>
       <ColorField label={colorLabel} value={resolved.accentColor ?? palette.text} onChange={accentColor => editAppearance({ accentColor })} />
       {appearance.accentColor && <Button size="xs" variant="ghost" onClick={() => editAppearance({ accentColor: undefined })}>恢复默认颜色</Button>}
     </div>
+    {sizes.some(({ target }) => !target) &&
+      <p className="text-xs text-muted-foreground">当前页面空间不足。腾出连续空位后可选择更大的规格。</p>}
     {numeric && <div className="display-number-animation" role="group" aria-label="数值动画和试播">
       <div className="display-animation-mode">
         <span aria-hidden="true">数值动画</span>

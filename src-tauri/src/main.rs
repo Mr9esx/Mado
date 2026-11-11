@@ -159,6 +159,7 @@ fn main() {
             collector::workspace::open_collectors,
             collector::workspace::focus_layout,
             collector::workspace::collector_catalog,
+            collector::workspace::collector_failures,
             collector::workspace::get_collector_variables,
             collector::workspace::manage_collector_instance,
             collector::workspace::collector_instance_grants,

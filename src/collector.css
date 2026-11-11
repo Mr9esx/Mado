@@ -69,7 +69,7 @@
   background: var(--studio-control-selected);
 }
 
-.collector-module span, .collector-templates button span { display: grid; min-width: 0; }
+.collector-module > span, .collector-templates button span { display: grid; min-width: 0; }
 .collector-module strong, .collector-templates strong { font-size: 14px; font-weight: 500; }
 .collector-module strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collector-module small, .collector-templates small { color: var(--muted-foreground); font-size: 12px; }

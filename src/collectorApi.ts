@@ -1,4 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { useEffect, useState } from 'react'
 import type { WidgetDefinition } from './layout'
 
 export type Draft = {
@@ -33,6 +35,7 @@ export type ModuleSummary = {
   actionInstance: string | null
   activeAction: string | null
   allowsMultipleInstances: boolean
+  trialFailed: boolean
   variableInstances: CollectorInstance[]
 }
 
@@ -112,6 +115,31 @@ export function readDefinition(text: string): Definition {
 }
 
 export const openCollectors = () => invoke<void>('open_collectors')
+
+export function useCollectorFailures() {
+  const [failures, setFailures] = useState<{ trials: string[]; instances: string[] }>({ trials: [], instances: [] })
+
+  useEffect(() => {
+    let active = true
+    let request = 0
+    function load() {
+      const current = ++request
+      void invoke<typeof failures>('collector_failures').then(value => {
+        if (active && request === current) setFailures(value)
+      }).catch(reason => console.error('无法读取采集错误摘要', reason))
+    }
+    const subscription = listen('collector-status', load)
+    void subscription.then(() => { if (active) load() })
+      .catch(reason => console.error('无法监听采集状态', reason))
+    return () => {
+      active = false
+      void subscription.then(unlisten => unlisten(), () => {})
+    }
+  }, [])
+
+  return failures
+}
+
 export const focusLayout = () => invoke<void>('focus_layout')
 export const getCatalog = () => invoke<Catalog>('collector_catalog')
 export const getCollectorVariables = (id: string) => invoke<CollectorVariables>('get_collector_variables', { id })

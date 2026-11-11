@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { canPlace, cellAt, cellHeight, cellWidth, display, firstOpenCell, repositionCard } from '../src/layout.ts'
+import { canPlace, cellAt, cellHeight, cellWidth, display, findResizePosition, firstOpenCell, repositionCard } from '../src/layout.ts'
 
 const quota = { id: 'quota', x: 0, y: 0, w: 1, h: 1 }
 const speed = { id: 'speed', x: 2, y: 0, w: 1, h: 1 }
@@ -50,6 +50,20 @@ test('resizes only to declared spans that fit the anchored card', () => {
   assert.equal(canPlace([quota], { ...quota, x: 1, w: 4 }), false)
   assert.equal(canPlace([], { ...quota, w: 1, h: 2 }), false)
   assert.equal(canPlace([], { ...quota, id: 'system.cpu-usage-history', w: 2, h: 2 }), false)
+})
+
+test('widens the Bilibili card leftward when it is on the right edge', () => {
+  const card = { id: 'bilibili.live-status', x: 3, y: 1, w: 1, h: 1, appearance: { accentColor: '#48B34A' } }
+  const wide = { ...card, w: 2 }
+  assert.deepEqual(findResizePosition([quota, card], wide), { ...wide, x: 2 })
+  assert.deepEqual(findResizePosition([quota, card], { ...wide, x: 1 }), { ...wide, x: 1 })
+  assert.equal(findResizePosition([card], { ...card, h: 2 }), undefined)
+})
+
+test('rejects a resize when the page has no contiguous space', () => {
+  const card = { id: 'bilibili.live-status', x: 3, y: 1, w: 1, h: 1 }
+  const layout = [{ ...quota, w: 4 }, { ...speed, x: 0, y: 1, w: 2 }, resets, card]
+  assert.equal(findResizePosition(layout, { ...card, w: 2 }), undefined)
 })
 
 test('the initial layout uses valid one-cell placements', () => {

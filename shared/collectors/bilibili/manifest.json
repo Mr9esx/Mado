@@ -49,6 +49,9 @@
       "stateLabels": {
         "live": "直播中",
         "offline": "未开播"
+      },
+      "stateStyles": {
+        "live": { "color": "#48B34A" }
       }
     }
   }

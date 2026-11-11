@@ -5,7 +5,9 @@ import { collectBilibili, projectLiveTransition } from '../shared/collectors/bil
 const response = value => ({ status: 200, text: JSON.stringify(value) })
 const room = (liveStatus, values = {}) => ({
   code: 0,
-  data: { roomid: 123456, uid: 998877, uname: '主播', title: '直播标题', live_status: liveStatus, ...values },
+  data: {
+    '998877': { room_id: 123456, uname: '样例UP主', title: '直播标题', live_status: liveStatus, ...values },
+  },
 })
 function api(reply) {
   const calls = []
@@ -25,9 +27,12 @@ function api(reply) {
 const settings = { BILIBILI_UID: '998877' }
 
 test('first sample reports existing live status without notifying', async () => {
-  const { context } = api(response(room(1)))
+  const { context, calls } = api(response(room(1)))
   const result = await collectBilibili(settings, context, null)
+  assert.equal(calls[0].path, '/room/v1/Room/get_status_info_by_uids?uids%5B%5D=998877')
   assert.equal(result.outputs.liveStatus.state, 'live')
+  assert.equal(result.outputs.liveStatus.detail, '样例UP主')
+  assert.equal(result.outputs.liveStatus.details.title, '直播标题')
   assert.deepEqual(result.desktopNotifications, [])
   assert.deepEqual(result.notifications, [])
 })
@@ -45,6 +50,7 @@ test('live to offline notifies once and later live transition can notify again',
   const offline = api(response(room(0)))
   const stopped = await collectBilibili(settings, offline.context, { live: true })
   assert.equal(stopped.outputs.liveStatus.state, 'offline')
+  assert.equal(stopped.outputs.liveStatus.detail, '样例UP主')
   assert.equal(stopped.desktopNotifications.length, 1)
   assert.match(stopped.desktopNotifications[0].title, /下播/)
 
@@ -65,6 +71,13 @@ test('validates UID and API response before producing a state', async () => {
   const { context } = api(response(room(1)))
   await assert.rejects(() => collectBilibili({ BILIBILI_UID: '998877/evil' }, context, null))
   await assert.rejects(() => collectBilibili(settings, api(response(room(3))).context, null))
+  await assert.rejects(() => collectBilibili(settings, api(response(room(1, { uname: ' ' }))).context, null), /昵称/)
+})
+
+test('recorded playback keeps the UP name and is shown as offline', async () => {
+  const result = await collectBilibili(settings, api(response(room(2))).context, null)
+  assert.equal(result.outputs.liveStatus.state, 'offline')
+  assert.equal(result.outputs.liveStatus.detail, '样例UP主')
 })
 
 test('projects both state edges while the first and unchanged samples are silent', () => {

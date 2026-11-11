@@ -164,6 +164,23 @@ export function firstOpenCell(layout: LayoutItem[], id: string, catalog = bundle
   }
 }
 
+export function findResizePosition(layout: LayoutItem[], item: LayoutItem, catalog = bundledWidgets): LayoutItem | undefined {
+  if (canPlace(layout, item, catalog)) return item
+  let nearest: LayoutItem | undefined
+  let nearestDistance = Infinity
+  for (let y = 0; y <= display.rows - item.h; y++) {
+    for (let x = 0; x <= display.columns - item.w; x++) {
+      const candidate = { ...item, x, y }
+      const distance = Math.abs(x - item.x) + Math.abs(y - item.y)
+      if (distance < nearestDistance && canPlace(layout, candidate, catalog)) {
+        nearest = candidate
+        nearestDistance = distance
+      }
+    }
+  }
+  return nearest
+}
+
 export function cellAt(rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>, clientX: number, clientY: number): Cell | null {
   const x = (clientX - rect.left) / rect.width
   const y = (clientY - rect.top) / rect.height

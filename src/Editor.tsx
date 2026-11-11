@@ -3,7 +3,7 @@ import { Fragment, useRef, useState, type CSSProperties, type KeyboardEvent, typ
 import { Button } from '@/components/ui/button'
 import { NumberField, NumberFieldDecrement, NumberFieldGroup, NumberFieldIncrement, NumberFieldInput } from '@/components/reui/number-field'
 import { openDesktopWidget, applyPages, useDevice } from './device'
-import { canPlace, cardWidget, cellAt, cellHeight, cellWidth, defaultDisplayTheme, display, firstOpenCell, repositionCard, sameLayout, widgetCatalog, type DisplayPage, type DisplayTheme, type LayoutItem, type Widget } from './layout'
+import { canPlace, cardWidget, cellAt, cellHeight, cellWidth, defaultDisplayTheme, display, findResizePosition, firstOpenCell, repositionCard, sameLayout, widgetCatalog, type DisplayPage, type DisplayTheme, type LayoutItem, type Widget } from './layout'
 import { PageManager } from './PageManager'
 import { pageError, pagesFromSnapshot } from './pages'
 import { recordLayoutEdit, sameLayoutEdit, type LayoutHistory } from './layoutDraft'
@@ -17,7 +17,7 @@ import { CardSettings } from './CardSettings'
 import { ScreenAppearance } from './ScreenAppearance'
 import { useCardPlayback } from './useCardPlayback'
 import { useAppearance } from './appearance'
-import { openCollectors } from './collectorApi'
+import { openCollectors, useCollectorFailures } from './collectorApi'
 import { displayTransportLabels, useDisplayConnection } from './displayConnection'
 import { DisplayConnectionDialog } from './DisplayConnectionDialog'
 
@@ -69,6 +69,7 @@ export function Editor() {
   const [syncError, setSyncError] = useState('')
   const [displayError, setDisplayError] = useState('')
   const [collectorError, setCollectorError] = useState('')
+  const collectorFailures = useCollectorFailures()
   const grid = useRef<HTMLDivElement>(null)
   const drag = useRef<Drag | null>(null)
   const saved = {
@@ -99,6 +100,12 @@ export function Editor() {
   const dirty = snapshot ? snapshot.lastSyncedAt == null || !sameLayoutEdit(draft ?? saved, saved)
     || (snapshot.appliedWidgets !== undefined && JSON.stringify(resolved) !== JSON.stringify(snapshot.appliedWidgets)) : false
   const validationError = pageError(pages)
+
+  function showCollectors() {
+    setCollectorError('')
+    void openCollectors().catch(reason => setCollectorError(`无法打开采集器。${String(reason)}`))
+  }
+
   function editPages(next: DisplayPage[], selection?: string, rotation = rotationSeconds, nextTheme = theme) {
     if (syncing || !snapshot) return
     setHistory(current => recordLayoutEdit(current, saved, { pages: next, rotationSeconds: rotation, theme: nextTheme }, currentPage.id))
@@ -297,12 +304,20 @@ export function Editor() {
         <aside className="component-tools" aria-label="组件库">
           <div className="library-heading">
             <h2>组件</h2>
-            <Button size="xs" variant="ghost" type="button" title={collectorError || '打开采集器工作区'} onClick={() => {
-              setCollectorError('')
-              void openCollectors().catch(reason => setCollectorError(`无法打开采集器。${String(reason)}`))
-            }}>
+            <Button size="xs" variant="ghost" type="button" title={collectorError || '打开采集器工作区'} onClick={showCollectors}>
               {collectorError ? <CircleAlert size={14} aria-hidden="true" /> : <Terminal size={14} aria-hidden="true" />}管理采集器
             </Button>
+          </div>
+          <div role="status">
+            {([
+              ['试跑失败', collectorFailures.trials],
+              ['采集异常', collectorFailures.instances],
+            ] as const).map(([label, names]) => names.length > 0 &&
+              <Button autoHeight size="xs" variant="ghost" type="button" className="collector-health"
+                key={label} title={names.join('、')} onClick={showCollectors}>
+                <CircleAlert size={14} aria-hidden="true" />
+                <span>{label} · {names[0]}{names.length > 1 ? `等 ${names.length} 项` : ''}</span>
+              </Button>)}
           </div>
           <div className="library-scroll">
             {Array.from(groups, ([groupId, definitions]) => {
@@ -404,7 +419,7 @@ export function Editor() {
                 <fieldset className="preview-settings-fields" disabled={syncing || !snapshot}>
                   {selectedItem && selectedWidget
                     ? <CardSettings item={selectedItem} widget={selectedWidget} theme={theme}
-                        currentValue={snapshot?.values[selectedItem.id]} fits={item => canPlace(layout, item, catalog)}
+                        currentValue={snapshot?.values[selectedItem.id]} resolveSize={item => findResizePosition(layout, item, catalog)}
                         onChange={place} onPlay={cardPlayback.play} />
                     : <ScreenAppearance theme={theme} onChange={next => editPages(pages, undefined, rotationSeconds, next)} />}
                 </fieldset>

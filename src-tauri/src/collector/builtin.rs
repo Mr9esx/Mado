@@ -3,6 +3,9 @@ use crate::device::Widget;
 use serde_json::{json, Value};
 use std::sync::OnceLock;
 
+const BILIBILI_SAMPLE: &str =
+    r#"{"code":0,"data":{"998877":{"room_id":123456,"uname":"样例UP主","title":"直播标题","live_status":1}}}"#;
+
 fn project(manifest: &str, files: &[(&str, &str)], fixture: Value) -> Project {
     let manifest = serde_json::from_str::<Manifest>(manifest).expect("valid bundled manifest");
     let project = Project {
@@ -130,10 +133,10 @@ pub fn projects() -> &'static [Project] {
                         "operation": "http", "alias": "bilibiliApi",
                         "params": {
                             "method": "GET",
-                            "path": "/room/v1/Room/getRoomInfoOld?mid=998877",
+                            "path": "/room/v1/Room/get_status_info_by_uids?uids%5B%5D=998877",
                             "headers": { "Accept": "application/json", "User-Agent": "Mado-Studio/1.0" }
                         },
-                        "result": { "status": 200, "text": "{\"code\":0,\"data\":{\"roomid\":123456,\"uid\":998877,\"uname\":\"主播\",\"title\":\"直播标题\",\"live_status\":1}}" }
+                        "result": { "status": 200, "text": BILIBILI_SAMPLE }
                     }]
                 }),
             ),
@@ -282,12 +285,13 @@ mod binding_tests {
             },
             |_| Ok(json!({
                 "status": 200,
-                "text": "{\"code\":0,\"data\":{\"roomid\":123456,\"uid\":998877,\"uname\":\"主播\",\"title\":\"直播标题\",\"live_status\":1}}"
+                "text": super::BILIBILI_SAMPLE
             })),
         );
         let collected = result.result.unwrap_or_else(|| panic!("bundled collector failed: {:?}", result.error));
         project.validate_outputs(&collected).unwrap();
         assert_eq!(collected.outputs["liveStatus"]["state"], "live");
+        assert_eq!(collected.outputs["liveStatus"]["detail"], "样例UP主");
         assert_eq!(collected.desktop_notifications.len(), 1);
         assert!(collected.desktop_notifications[0].title.contains("开播"));
         assert_eq!(collected.notifications, ["liveStatus"]);

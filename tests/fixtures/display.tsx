@@ -99,7 +99,7 @@ function Preview() {
         { id: 'task', x: 0, y: 0, w: 4, h: 1 }, { ...card, y: 1, h: 1 },
       ]} />
       <CardSettings item={card} widget={definitions[0]} theme={defaultDisplayTheme} onChange={setCard}
-        currentValue={snapshot.values[card.id]} onPlay={cardPlayback.play} fits={item => item.h === 1 && item.w <= 4} />
+        currentValue={snapshot.values[card.id]} onPlay={cardPlayback.play} resolveSize={item => item.h === 1 && item.w <= 4 ? item : undefined} />
     </section>
   </main>
 }
