@@ -35,8 +35,8 @@
 | `ModuleManifest` 字段 | 由谁管理 | 规则 |
 | --- | --- | --- |
 | `name` | 作者 | 模块显示名称，允许改名。 |
-| `settings` | 作者 | 可选。每项须有 `label`，可填 `default`。包含 `description`、`required` 或 `secret` 的参数是采集器变量。Studio 加密保存变量默认值及用户按实例配置的值。 |
-| `permissions` | 作者 | 可选。按别名声明宿主资源与允许的操作，在试跑或发布时确认实际资源和授权范围。 |
+| `settings` | 作者 | 可选。普通参数使用 `label` 和可选的 `default`。变量还声明 `description`、`required` 或 `secret`；变量键必须为全大写字母、数字和下划线，并以字母开头。Studio 生成表单并加密保存变量默认值及用户按实例配置的值。 |
+| `permissions` | 作者 | 可选。按别名声明宿主资源与允许的操作；试跑、发布或启用时会按具体操作请求用户确认授权。 |
 | `resources` | 作者 | 可选。以资源别名为键，填写 HTTP 地址或已知的本机路径。新项目在这里填写 HTTP 地址。省略本机路径时，授权流程会请用户选择资源。 |
 | `schedule` | 作者 | 新项目使用 `{ refreshSeconds, enabled }`。采集间隔为 5–3600 秒，设 `enabled: false` 后发布可暂停采集。 |
 | `outputs` | 作者 | 以 `outputKey` 为索引，至少声明一路。每路声明 `valueType`，按需声明单位、状态键和辅助字段。 |
@@ -52,6 +52,36 @@ Studio 在新建时为草稿保留 ID，并在注册或发布时原子检查唯�
 - ID 已存在但内容不同时，可以导入为更新草稿，或者「作为副本导入」，由 Studio 分配新 ID。若已有编辑中的草稿，先提示处理该草稿。更新在测试和发布后才会生效，沿用原 SDK 版本。要使用不同 SDK 版本，请作为副本导入。自带插件的保留 ID 禁止通过导入更新。
 
 SDK v1 的 `inputs` 保留兼容。Studio 按已有绑定或本次授权预读取 `httpJson` 或 `fileJson`，再把 JSON 传给旧脚本的 `collect(inputs, context)`。
+
+### 采集器变量
+
+新建采集器需要用户输入的配置应放在 `settings` 中。带有 `description`、`required` 或 `secret` 元数据的设置项会成为变量：Studio 在已发布采集器的「配置变量」面板按清单顺序生成表单，并按采集器实例分别保存。变量键名匹配 `[A-Z][A-Z0-9_]*`；历史模块中未声明这些变量元数据的小写设置键继续兼容。
+
+```json
+{
+  "settings": {
+    "GITHUB_REPOSITORY": {
+      "label": "仓库",
+      "default": "",
+      "description": "填写 owner/repo。",
+      "required": true
+    },
+    "GITHUB_TOKEN": {
+      "label": "访问令牌",
+      "default": "",
+      "description": "可选的 GitHub 访问令牌。",
+      "required": false,
+      "secret": true
+    }
+  }
+}
+```
+
+脚本在 `collect(settings, context)` 的第一个参数中按键读取变量，例如 `settings.GITHUB_REPOSITORY`。可选变量的空值可清除；必填值为空时，Studio 阻止保存或启用采集。
+
+变量值和声明的默认值由 Studio 使用 AES-256-GCM 加密后写入 App 本机的采集器存储。App 首次运行时自动生成密钥，并将其保存在应用配置目录的独立文件中；不使用系统凭据库，也不要求用户设置 App 密码。用户无需解锁步骤。密钥文件权限限制为当前用户可读写。状态响应、日志、错误及导出的模块项目不会包含变量值；离线 fixture 可以单独声明用于试跑的样例设置，不会读取用户的实例配置。
+
+这种设计保护变量不被单独读取采集器存储文件的人直接看到。密钥也保存在本机，因此不能防止当前用户权限下运行的程序同时读取密钥和密文。若密钥文件缺失或损坏，App 会报告错误，不会覆盖现有密文或静默生成新密钥。
 
 发布时，Studio 自动建立内部运行记录。作者在 `defineModule()` 中提供普通参数默认值和采集计划。已有实例的 ID 和布局绑定会沿用。旧项目省略 `schedule` 时继续使用此前保存的参数和周期，新增 `schedule` 并发布即可采用项目里的参数与采集计划。
 
@@ -73,13 +103,15 @@ SDK v1 的 `inputs` 保留兼容。Studio 按已有绑定或本次授权预读�
 | API | 行为 |
 | --- | --- |
 | `defineModule({ …, collect })` | 从 `@mado/sdk` 导入，作为入口脚本的默认导出。名称、参数、授权、输出和采集函数在同一个对象中定义。 |
-| `collect(settings, context)` | 每次试跑或正式采集时调用。脚本自行发起 I/O，返回 `{ outputs, notifications? }` 或相应的 Promise。 |
+| `collect(settings, context)` | 每次试跑或正式采集时调用。脚本自行发起 I/O，返回 `{ outputs, notifications?, desktopNotifications? }` 或相应的 Promise。 |
 | `context.sampledAtUnixMs` | Studio 为本次采集分配的时间戳。该批输出使用同一时间戳。 |
 | `context.log(message)` | 写入本次执行的有限长度调试日志。日志只显示在 Studio。 |
 
 `outputs` 必须覆盖清单声明的全部输出键，缺值用 `null`。Studio 校验整批数据后提交，校验失败时整批丢弃，并在实例状态中记录失败原因。每路 `OutputSample` 保存 `sourceInstanceId`、`outputKey`、`sampledAtUnixMs` 和 `value`。采集失败时，最近成功值可保留到有效期结束。定时实例默认有效期为三个刷新周期。暂停采集或读数过期后，该实例的卡片显示空态。历史样本由 Studio 按所需图表窗口和趋势周期保留。
 
-`notifications` 是本次请求提醒的状态输出键列表。每个键必须对应本批非空的 `state` 输出。提醒请求独立于可缓存的样本，Studio 只将它投递到本次更新中绑定该输出且允许提醒的卡片。下面的例子假设模块已声明 `task` 为状态输出，并把 `completed` 列入 `stateKeys`。
+`notifications` 是本次请求屏幕卡片提醒的状态输出键列表。每个键必须对应本批非空的 `state` 输出。提醒请求独立于可缓存的样本，Studio 只将它投递到本次更新中绑定该输出且允许提醒的卡片。
+
+`desktopNotifications` 是桌面系统通知列表，与屏幕卡片提醒分开处理。清单必须声明 `kind: "notification"` 的权限，用户确认后实例才可启用。每轮最多发一条，标题最多 80 字、正文最多 256 字，并拒绝控制字符。通知服务不可用时仍会提交读数。状态转换通知应使用 `context.state` 记住上次有效状态；首次采样只建立基线，遇到采样错误时不要返回更新状态。下面的例子假设模块已声明 `task` 为状态输出，并把 `completed` 列入 `stateKeys`。
 
 ```js
 import { defineModule } from '@mado/sdk'
@@ -122,7 +154,8 @@ Studio 的自带和用户插件都由同一个实例调度器启动，在独立 
 | `stdio` | `context.process.request(alias, method, params?)`、`context.process.notify(alias, method, params?)` | 用户选择可执行文件，清单声明固定的启动 `args` 和允许的 `methods`。同一次采集复用一个逐行 JSON-RPC 会话，采集结束即关闭。可选 `versionless` 省略协议版本字段，`environment` 将环境变量绑定到已授权资源别名。 |
 | `stdio` | `context.process.receive(alias, method, timeoutMs?)` → JSON 或 `null` | 在用户发起的插件操作中等待允许的通知。单次最多等待 1000 毫秒。 |
 | `browser` | `context.interaction.openUrl(alias, url)` | 仅用户发起的操作可打开清单 `hosts` 明确允许的 HTTPS 站点。 |
-| `system` | `context.system.read(alias)` | 本机指标包含 `cpuUsagePercent`、`memoryUsedBytes`、`memoryTotalBytes`、`uptimeSeconds`，保留旧的 `cpuPercent` 和 `memoryPercent`。 |
+| `system` | `context.system.read(alias)` | 本机指标包括 `cpuUsagePercent`、`memoryUsedBytes`、`memoryAvailableBytes`、`memoryTotalBytes`、`systemDiskUsedPercent`、`networkReceivedBytes`、`networkTransmittedBytes` 和 `uptimeSeconds`，并保留旧的 `cpuPercent` 和 `memoryPercent`。 |
+| `notification` | 返回 `desktopNotifications: [{ title, body }]` | 清单显式声明通知能力，用户确认后才允许实例启用。每轮最多发送一条通知；标题最多 80 字，正文最多 256 字，不能包含控制字符。通知发送失败不会丢弃本轮读数。 |
 
 例如，作者声明名为 `metrics` 的 HTTP 权限和名为 `region` 的普通参数。用户把 `metrics` 绑定到服务地址，脚本根据当前状态决定是否继续取详情。
 
@@ -143,7 +176,7 @@ export default defineModule({
 
 每次定时采集最多 24 次 SDK I/O 调用，执行时长和单次结果大小均受限。主动授权启动的程序以当前用户权限运行。脚本可以返回 `state`，由调度器在下一次同实例采集通过 `context.state` 传回。插件用它维护采样缓存，实例或发布版本变化时重置，应用重启后重新采集。可选的 `status` 用于展示插件业务状态。
 
-「测试运行」默认离线。样例数据用 `settings` 提供参数，用 `calls` 提供 `{ operation, alias, params, result }`。样例按实际调用的操作、别名和参数匹配。同一个调用重复出现时，依次消耗对应的样例响应。`operation` 可为 `http`、`readText`、`list`、`findFiles`、`readWindow`、`run`、`rpc`、`notify`、`receive`、`openUrl` 或 `system`。「用实际资源试跑」打开授权表单，本次测试和定时采集走同一套检查。
+「测试运行」默认离线。样例数据用 `settings` 提供试跑变量，用 `calls` 提供 `{ operation, alias, params, result }`。样例按实际调用的操作、别名和参数匹配。同一个调用重复出现时，依次消耗对应的样例响应。`operation` 可为 `http`、`readText`、`list`、`findFiles`、`readWindow`、`run`、`rpc`、`notify`、`receive`、`openUrl` 或 `system`。「用实际资源试跑」打开授权表单，本次测试和定时采集走同一套检查。
 
 ## 插件操作与独立执行
 
@@ -418,7 +451,11 @@ export function readUsage(cpu) {
 
 ## 自带 Codex 插件与历史布局兼容
 
-Codex 与电脑插件都随 Studio 发布，并使用与用户插件相同的调度器。Codex 的 MJS 实现 App Server 握手、账号与额度查询、登录流程、会话日志解析、速度和任务选择。脚本通过通用 SDK 访问进程、授权目录和浏览器。Rust 设置适配器仅把现有面板的操作和字段映射到通用插件实例。电脑插件读取通用系统指标，由 MJS 产生 CPU、内存和开机时长输出。
+Codex 与电脑插件都随 Studio 发布，并使用与用户插件相同的调度器。Codex 的 MJS 实现 App Server 握手、账号与额度查询、登录流程、会话日志解析、速度和任务选择。脚本通过通用 SDK 访问进程、授权目录和浏览器。Rust 设置适配器仅把现有面板的操作和字段映射到通用插件实例。电脑插件通过通用系统能力读取 CPU、内存、系统盘、网络累计流量和开机时长，由 MJS 计算短期上传与下载速率。新增系统卡片使用 `cpuUsage`、`memoryUsage`、`systemDisk`、`downloadRate`、`uploadRate` 和 `uptime` 输出；现有 `system.*` 组件 ID 保持兼容。
+
+随 App 提供 GitHub 和 B 站直播两个可选模块。GitHub 模块默认停用、每 60 秒查询一次，需填写必填的 `GITHUB_REPOSITORY`；`GITHUB_TOKEN` 可选，按敏感变量加密保存。GitHub 令牌只通过 HTTPS 请求头发送到 `api.github.com`。模块统计开放 PR、开放 Issue（不把 PR 算作 Issue）并显示最近一次 Actions 状态。未配置令牌时公开 API 仍可能受 GitHub 匿名请求限额影响。
+
+B 站直播模块默认停用、每 30 秒查询一次，需填写主播的 `BILIBILI_UID`。启用时会单独请求用户确认桌面通知权限。第一次成功采样只记录当前状态；以后每次开播和下播状态转换各通知一次，状态持续不变时不重复通知。短暂采集失败会保留上一次状态。该模块读取 B 站公开直播状态接口，接口响应格式可能随 B 站服务调整而变化。
 
 | 保留的布局 ID | `outputKey` | SDK 输出 |
 | --- | --- | --- |
