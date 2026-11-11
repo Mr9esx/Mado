@@ -115,7 +115,13 @@ export function CollectorWorkspace() {
         setVariableChanges({})
         setVariableForm({ id, variables: await getCollectorVariables(id) })
       } else {
-        await setCollectorEnabled(id, enabled)
+        let approval: Approval | undefined
+        if (enabled && module?.builtIn) {
+          const authorization = await requestApproval(await getDraft(id))
+          if (!authorization.accepted) return
+          approval = authorization.approval
+        }
+        await setCollectorEnabled(id, enabled, approval)
       }
       setCatalog(await getCatalog())
       setNotice(enabled === undefined ? '变量已保存。' : enabled ? '已启用采集。' : '已停用采集。')

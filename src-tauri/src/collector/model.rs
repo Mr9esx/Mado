@@ -164,6 +164,9 @@ pub enum Permission {
     System {
         label: String,
     },
+    Notification {
+        label: String,
+    },
 }
 
 fn get_only() -> Vec<String> {
@@ -179,7 +182,8 @@ impl Permission {
             | Self::Process { label, .. }
             | Self::Stdio { label, .. }
             | Self::Browser { label, .. }
-            | Self::System { label } => label,
+            | Self::System { label }
+            | Self::Notification { label } => label,
         }
     }
 
@@ -340,10 +344,30 @@ pub struct Collected {
     pub outputs: Fields,
     #[serde(default)]
     pub notifications: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub desktop_notifications: Vec<DesktopNotification>,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub state: Value,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub status: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopNotification {
+    pub title: String,
+    pub body: String,
+}
+
+impl DesktopNotification {
+    fn valid(&self) -> bool {
+        !self.title.trim().is_empty()
+            && self.title.chars().count() <= 80
+            && !self.title.chars().any(char::is_control)
+            && !self.body.trim().is_empty()
+            && self.body.chars().count() <= 256
+            && !self.body.chars().any(char::is_control)
+    }
 }
 
 pub fn key_valid(key: &str) -> bool {
@@ -615,6 +639,15 @@ impl Project {
     }
 
     pub fn validate_outputs(&self, result: &Collected) -> Result<(), String> {
+        let notifications = &result.desktop_notifications;
+        let notification_allowed = self.manifest.definition.permissions.values()
+            .any(|permission| matches!(permission, Permission::Notification { .. }));
+        if !notifications.is_empty() && !notification_allowed {
+            return Err("采集器未声明桌面通知权限。".into());
+        }
+        if notifications.len() > 1 || notifications.iter().any(|notification| !notification.valid()) {
+            return Err("桌面通知内容无效或超出长度限制。".into());
+        }
         let outputs = &self.manifest.definition.outputs;
         if !outputs.keys().eq(result.outputs.keys()) {
             return Err("返回值 outputs 必须覆盖模块声明的所有输出键，缺值请用 null。".into());
@@ -879,4 +912,39 @@ mod tests {
             "public-default"
         );
     }
+    fn notification_project(permission: bool) -> Project {
+        serde_json::from_value(json!({
+            "manifest": {
+                "moduleId": "notify-test",
+                "sdkApiVersion": 2,
+                "entry": "index.mjs",
+                "name": "通知测试",
+                "permissions": if permission { json!({
+                    "desktop": { "kind": "notification", "label": "桌面通知" }
+                }) } else { json!({}) },
+                "outputs": {},
+                "widgets": {}
+            },
+            "files": { "index.mjs": "" },
+            "fixture": {}
+        })).unwrap()
+    }
+
+    #[test]
+    fn desktop_notifications_require_declared_permission_and_safe_payloads() {
+        let make = |title: &str, body: &str| Collected {
+            outputs: Fields::new(),
+            notifications: vec![],
+            state: Value::Null,
+            status: Value::Null,
+            desktop_notifications: vec![DesktopNotification { title: title.into(), body: body.into() }],
+        };
+        notification_project(true).validate_outputs(&make("B站主播开播", "正在直播")).unwrap();
+        assert!(notification_project(false).validate_outputs(&make("标题", "内容")).is_err());
+        assert!(notification_project(true).validate_outputs(&make("", "内容")).is_err());
+        assert!(notification_project(true).validate_outputs(&make(&"标".repeat(81), "内容")).is_err());
+        assert!(notification_project(true).validate_outputs(&make("标题", &"内".repeat(257))).is_err());
+        assert!(notification_project(true).validate_outputs(&make("标题\n攻击", "内容")).is_err());
+    }
+
 }

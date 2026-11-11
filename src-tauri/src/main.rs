@@ -114,6 +114,7 @@ fn main() {
         });
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(Mutex::new(Device::new(power)))
         .manage(display_connection::DisplayConnection::default())
         .setup(|app| {

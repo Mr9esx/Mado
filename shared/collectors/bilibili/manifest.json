@@ -1,0 +1,54 @@
+{
+  "moduleId": "bilibili",
+  "name": "B 站直播",
+  "sdkApiVersion": 2,
+  "entry": "index.mjs",
+  "schedule": {
+    "refreshSeconds": 30,
+    "enabled": false
+  },
+  "settings": {
+    "BILIBILI_UID": {
+      "label": "主播 UID",
+      "default": "",
+      "description": "填写 B 站用户空间 UID，应用会读取公开的直播间状态。",
+      "required": true
+    }
+  },
+  "resources": {
+    "bilibiliApi": "https://api.live.bilibili.com"
+  },
+  "permissions": {
+    "bilibiliApi": {
+      "kind": "http",
+      "label": "B 站直播状态（仅 GET）",
+      "methods": ["GET"],
+      "hosts": ["api.live.bilibili.com"]
+    },
+    "desktopNotifications": {
+      "kind": "notification",
+      "label": "开播和下播桌面通知"
+    }
+  },
+  "outputs": {
+    "liveStatus": {
+      "valueType": "state",
+      "detailKeys": ["title", "url"],
+      "stateKeys": ["live", "offline"]
+    }
+  },
+  "widgets": {
+    "live-status": {
+      "outputKey": "liveStatus",
+      "kind": "state",
+      "label": "直播",
+      "shortLabel": "直播",
+      "supportedSpans": [{"w": 1,"h": 1},{"w": 2,"h": 1},{"w": 2,"h": 2},{"w": 4,"h": 1}],
+      "supportsNotify": true,
+      "stateLabels": {
+        "live": "直播中",
+        "offline": "未开播"
+      }
+    }
+  }
+}

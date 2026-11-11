@@ -466,7 +466,10 @@ impl Workspace {
                     module_id: id.clone(),
                     name: definition.name.clone(),
                     settings: BTreeMap::new(),
-                    approved_permissions: definition.permissions.clone(),
+                    approved_permissions: definition.permissions.iter()
+                        .filter(|(_, permission)| !matches!(permission, Permission::Notification { .. }))
+                        .map(|(alias, permission)| (alias.clone(), permission.clone()))
+                        .collect(),
                     refresh_seconds: schedule.refresh_seconds,
                     enabled: schedule.enabled,
                 });
@@ -583,7 +586,12 @@ impl Workspace {
         self.save_variable_instance(next)
     }
 
-    fn set_collector_enabled(&mut self, id: &str, enabled: bool) -> Result<String, String> {
+    fn set_collector_enabled(
+        &mut self,
+        id: &str,
+        enabled: bool,
+        approval: Option<Approval>,
+    ) -> Result<String, String> {
         let (instance, definition) = self.variable_target(id)?;
         if !definition.settings.values().any(Setting::is_variable) {
             return Err("此采集器没有可配置变量。".into());
@@ -593,7 +601,18 @@ impl Workspace {
             definition.validate_required_variables(&next.settings)?;
             io::settings(definition, &next.settings)?;
             if definition.permissions != next.approved_permissions {
-                return Err("模块的资源授权已变化，请重新发布并确认。".into());
+                let project = builtin::get(&instance.module_id)
+                    .or_else(|| self.catalog.modules.get(&instance.module_id)
+                        .and_then(|module| module.released.as_ref()).map(|release| &release.project))
+                    .ok_or("找不到已发布采集器。")?;
+                let current = self.catalog.modules.get(&instance.module_id)
+                    .and_then(|module| module.released.as_ref()).map(|release| &release.project);
+                let planned = plan_sources(project, current, &self.catalog, false)?;
+                next = planned.authorize(project, approval)?
+                    .into_iter().find(|source| source.id == id)
+                    .ok_or("找不到采集实例。")?;
+                definition.validate_required_variables(&next.settings)?;
+                io::settings(definition, &next.settings)?;
             }
         }
         next.enabled = enabled;
@@ -1130,10 +1149,11 @@ pub fn set_collector_enabled(
     app: AppHandle,
     id: String,
     enabled: bool,
+    approval: Option<Approval>,
 ) -> Result<Value, String> {
     command_window(&window)?;
     update_collector_variables(&app, |workspace| {
-        workspace.set_collector_enabled(&id, enabled)
+        workspace.set_collector_enabled(&id, enabled, approval)
     })
 }
 
@@ -1278,7 +1298,10 @@ fn plan_sources(
         || definition.permissions.values().any(|permission| {
             !matches!(
                 permission,
-                Permission::Http { .. } | Permission::System { .. } | Permission::Browser { .. }
+                Permission::Http { .. }
+                    | Permission::System { .. }
+                    | Permission::Browser { .. }
+                    | Permission::Notification { .. }
             )
         });
     let plan = move || {
@@ -1417,7 +1440,7 @@ impl PlannedSources {
                 let mut targets = BTreeMap::new();
                 for request in self.requests {
                     let kind = request.scope["kind"].as_str().expect("resource kind");
-                    if matches!(kind, "system" | "browser") {
+                    if matches!(kind, "system" | "browser" | "notification") {
                         continue;
                     }
                     let target = request
@@ -1499,6 +1522,13 @@ pub async fn collector_grants(
                 return Err("脚本已变更，请重新试跑。".into());
             }
             draft.inspected_project(false, false)?
+        } else if !restore {
+            if let Some(project) = builtin::get(&id) {
+                project.clone()
+            } else {
+                let state = state.lock().map_err(|error| error.to_string())?;
+                publication_project(&state, &id, false)?
+            }
         } else {
             let state = state.lock().map_err(|error| error.to_string())?;
             publication_project(&state, &id, restore)?
@@ -1991,6 +2021,17 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<(), String
     Ok(())
 }
 
+fn dispatch_desktop_notifications(
+    notifications: &[super::model::DesktopNotification],
+    mut send: impl FnMut(&super::model::DesktopNotification) -> Result<(), String>,
+) {
+    for notification in notifications {
+        if let Err(error) = send(notification) {
+            eprintln!("桌面通知发送失败：{}", error.chars().take(300).collect::<String>());
+        }
+    }
+}
+
 fn poll_sources(app: AppHandle) {
     let Ok(client) = http_client() else { return };
     let state = app.state::<Mutex<Workspace>>();
@@ -2062,6 +2103,15 @@ fn poll_sources(app: AppHandle) {
                         },
                     );
                     super::publish_readings(&app, &instance.id, values);
+                    dispatch_desktop_notifications(&result.desktop_notifications, |notification| {
+                        use tauri_plugin_notification::NotificationExt;
+                        app.notification()
+                            .builder()
+                            .title(&notification.title)
+                            .body(&notification.body)
+                            .show()
+                            .map_err(|error| error.to_string())
+                    });
                 }
                 Err(error) => {
                     workspace
@@ -2177,6 +2227,47 @@ fn poll_sources(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn live_collection_is_blocked_until_declared_notification_scope_is_approved() {
+        let project = builtin::get("bilibili").unwrap();
+        let mut approved_permissions = project.manifest.definition.permissions.clone();
+        approved_permissions.remove("desktopNotifications");
+        let instance = Instance {
+            id: "bilibili".into(),
+            module_id: "bilibili".into(),
+            name: "B 站直播".into(),
+            settings: BTreeMap::from([("BILIBILI_UID".into(), "998877".into())]),
+            approved_permissions,
+            refresh_seconds: 30,
+            enabled: true,
+        };
+        let error = execute_with_state(
+            project,
+            &instance,
+            &http_client().unwrap(),
+            10_000,
+            Value::Null,
+            None,
+        ).unwrap_err();
+        assert!(error.contains("授权已变化"));
+    }
+
+    #[test]
+    fn desktop_notification_dispatch_failure_does_not_stop_readings_or_later_notices() {
+        use super::super::model::DesktopNotification;
+        let notifications = vec![
+            DesktopNotification { title: "开播".into(), body: "开始直播".into() },
+            DesktopNotification { title: "下播".into(), body: "直播结束".into() },
+        ];
+        let mut sent = 0;
+        super::dispatch_desktop_notifications(&notifications, |_| {
+            sent += 1;
+            Err("notification service unavailable".into())
+        });
+        assert_eq!(sent, 2);
+    }
+
+
     use super::*;
 
     const VARIABLE_VALUE: &str = "不应出现在本机配置的变量";
@@ -2273,6 +2364,31 @@ mod tests {
     }
 
     #[test]
+    fn desktop_notification_permission_requires_explicit_user_approval_before_enable() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::load(directory.path().join("collectors.json")).unwrap();
+        let project = builtin::get("bilibili").unwrap();
+        let id = "bilibili".to_string();
+        workspace.catalog.instances.get_mut(&id).unwrap()
+            .settings.insert("BILIBILI_UID".into(), "998877".into());
+        let current = workspace.catalog.modules[&id].released.as_ref().unwrap().project.clone();
+        let planned = plan_sources(project, Some(&current), &workspace.catalog, false).unwrap();
+        assert_eq!(planned.requests.len(), 2);
+        assert!(planned.requests.iter().any(|request| request.scope["kind"] == "notification"));
+        assert!(workspace.set_collector_enabled(&id, true, None).is_err());
+        assert!(!workspace.catalog.instances[&id].enabled);
+
+        let approval = Approval {
+            requests: planned.requests.clone(),
+            targets: BTreeMap::new(),
+        };
+        workspace.set_collector_enabled(&id, true, Some(approval)).unwrap();
+        let instance = &workspace.catalog.instances[&id];
+        assert!(instance.enabled);
+        assert_eq!(instance.approved_permissions, project.manifest.definition.permissions);
+    }
+
+    #[test]
     fn configure_variables_uses_released_fields_in_order_and_hides_secrets() {
         let (_directory, workspace, module_id, _) = configuration_workspace();
         let form =
@@ -2296,7 +2412,7 @@ mod tests {
         let (_directory, mut workspace, module_id, id) = configuration_workspace();
         workspace.catalog.instances.get_mut(&id).unwrap().enabled = false;
         assert!(workspace
-            .set_collector_enabled(&id, true)
+            .set_collector_enabled(&id, true, None)
             .unwrap_err()
             .contains("仓库"));
         assert!(!workspace.catalog.instances[&id].enabled);
@@ -2404,7 +2520,7 @@ mod tests {
                 BTreeMap::from([("PUBLIC_VALUE".into(), "other/repo".into())]),
             )
             .unwrap();
-        workspace.set_collector_enabled("second", true).unwrap();
+        workspace.set_collector_enabled("second", true, None).unwrap();
         assert!(workspace.catalog.instances["second"].enabled);
         assert_eq!(
             workspace.catalog.instances["second"].settings["PUBLIC_VALUE"],

@@ -47,7 +47,7 @@ export type ImportReview = { draft: Draft; conflict: boolean; identical: boolean
 
 export type Permission = { label: string } & (
   | { kind: 'http'; methods?: string[] }
-  | { kind: 'file' | 'directory' | 'system' }
+  | { kind: 'file' | 'directory' | 'system' | 'notification' }
   | { kind: 'process'; args: string[][] }
   | { kind: 'stdio'; args: string[]; methods: string[] }
   | { kind: 'browser'; hosts: string[] }
@@ -104,8 +104,8 @@ export const getCatalog = () => invoke<Catalog>('collector_catalog')
 export const getCollectorVariables = (id: string) => invoke<CollectorVariables>('get_collector_variables', { id })
 export const saveCollectorVariables = (id: string, values: Record<string, string>) =>
   invoke<CollectorInstanceStatus>('save_collector_variables', { id, values })
-export const setCollectorEnabled = (id: string, enabled: boolean) =>
-  invoke<CollectorInstanceStatus>('set_collector_enabled', { id, enabled })
+export const setCollectorEnabled = (id: string, enabled: boolean, approval?: Approval) =>
+  invoke<CollectorInstanceStatus>('set_collector_enabled', { id, enabled, approval })
 export const runCollectorAction = (id: string, action: string) =>
   invoke<void>('run_collector_action', { id, action })
 export const cancelCollectorAction = (id: string) =>

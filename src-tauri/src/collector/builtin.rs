@@ -18,7 +18,7 @@ fn project(manifest: &str, files: &[(&str, &str)], fixture: Value) -> Project {
 }
 
 pub fn projects() -> &'static [Project] {
-    static PROJECTS: OnceLock<[Project; 3]> = OnceLock::new();
+    static PROJECTS: OnceLock<[Project; 4]> = OnceLock::new();
     PROJECTS.get_or_init(|| {
         [
             project(
@@ -110,6 +110,31 @@ pub fn projects() -> &'static [Project] {
                             "result": { "status": 200, "text": "{\"workflow_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\",\"name\":\"CI\"}]}" }
                         }
                     ]
+                }),
+            ),
+            project(
+                include_str!("../../../shared/collectors/bilibili/manifest.json"),
+                &[
+                    (
+                        "index.mjs",
+                        include_str!("../../../shared/collectors/bilibili/index.mjs"),
+                    ),
+                    (
+                        "client.mjs",
+                        include_str!("../../../shared/collectors/bilibili/client.mjs"),
+                    ),
+                ],
+                json!({
+                    "settings": { "BILIBILI_UID": "998877" },
+                    "calls": [{
+                        "operation": "http", "alias": "bilibiliApi",
+                        "params": {
+                            "method": "GET",
+                            "path": "/room/v1/Room/getRoomInfoOld?mid=998877",
+                            "headers": { "Accept": "application/json", "User-Agent": "Mado-Studio/1.0" }
+                        },
+                        "result": { "status": 200, "text": "{\"code\":0,\"data\":{\"roomid\":123456,\"uid\":998877,\"uname\":\"主播\",\"title\":\"直播标题\",\"live_status\":1}}" }
+                    }]
                 }),
             ),
         ]
@@ -224,6 +249,49 @@ mod binding_tests {
         assert_eq!(definition.settings["GITHUB_TOKEN"].required, Some(false));
         let labels: Vec<_> = definition.widgets.values().map(|widget| widget.label.as_str()).collect();
         assert_eq!(labels, ["CI状态", "Issue", "PR数"]);
+    }
+
+    #[test]
+    fn bilibili_module_declares_required_uid_and_notification_permission() {
+        let project = super::get("bilibili").unwrap();
+        assert_eq!(project.manifest.definition.settings["BILIBILI_UID"].required, Some(true));
+        assert!(matches!(
+            project.manifest.definition.permissions.get("desktopNotifications"),
+            Some(super::super::model::Permission::Notification { .. })
+        ));
+        assert_eq!(project.manifest.definition.schedule.as_ref().unwrap().refresh_seconds, 30);
+        assert!(!project.manifest.definition.schedule.as_ref().unwrap().enabled);
+        assert!(project.manifest.definition.widgets.values().all(|widget| widget.label.chars().count() <= 4));
+    }
+
+    #[test]
+    fn bundled_bilibili_collector_emits_both_notification_edges_through_runtime() {
+        use crate::collector::runner::{self, Request};
+        use serde_json::{json, Value};
+
+        let project = super::get("bilibili").unwrap();
+        let result = runner::evaluate_with(
+            Request {
+                entry: project.manifest.entry.clone(),
+                files: project.files.clone(),
+                inputs: json!({ "BILIBILI_UID": "998877" }),
+                private_settings: vec![],
+                sampled_at: 10_000,
+                action: None,
+                state: json!({ "live": false }),
+            },
+            |_| Ok(json!({
+                "status": 200,
+                "text": "{\"code\":0,\"data\":{\"roomid\":123456,\"uid\":998877,\"uname\":\"主播\",\"title\":\"直播标题\",\"live_status\":1}}"
+            })),
+        );
+        let collected = result.result.unwrap_or_else(|| panic!("bundled collector failed: {:?}", result.error));
+        project.validate_outputs(&collected).unwrap();
+        assert_eq!(collected.outputs["liveStatus"]["state"], "live");
+        assert_eq!(collected.desktop_notifications.len(), 1);
+        assert!(collected.desktop_notifications[0].title.contains("开播"));
+        assert_eq!(collected.notifications, ["liveStatus"]);
+        assert_eq!(collected.state["live"], Value::Bool(true));
     }
 
     #[test]
