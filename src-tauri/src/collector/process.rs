@@ -1,7 +1,7 @@
 use super::runner::read_line;
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     io::{self, BufReader, Read, Write},
     process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
     sync::{
@@ -32,7 +32,7 @@ pub(super) struct ManagedChild {
 impl ManagedChild {
     pub(super) fn start(command: &mut Command) -> io::Result<Self> {
         if PROCESSES.lock().expect("process registry").closing {
-            return Err(io::Error::other("Studio 正在退出。"));
+            return Err(io::Error::other("Mado 正在退出。"));
         }
         #[cfg(unix)]
         {
@@ -52,7 +52,7 @@ impl ManagedChild {
         };
         let mut processes = PROCESSES.lock().expect("process registry");
         if processes.closing {
-            return Err(io::Error::other("Studio 正在退出。"));
+            return Err(io::Error::other("Mado 正在退出。"));
         }
         processes.active.insert(id, Arc::downgrade(&child.child));
         Ok(child)
@@ -172,11 +172,52 @@ pub(crate) struct Session {
     child: ManagedChild,
     outgoing: Option<SyncSender<Outbound>>,
     framing: Framing,
-    pub(crate) messages: Receiver<Value>,
+    messages: Receiver<Value>,
+    notifications: VecDeque<Value>,
     next_id: u64,
 }
 
 impl Session {
+    pub(crate) fn receive(
+        &mut self,
+        method: &str,
+        deadline: Instant,
+    ) -> Result<Option<Value>, String> {
+        if let Some(index) = self
+            .notifications
+            .iter()
+            .position(|message| message["method"] == method)
+        {
+            return Ok(self
+                .notifications
+                .remove(index)
+                .map(|message| message["params"].clone()));
+        }
+        loop {
+            match self
+                .messages
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                Ok(message) if message["method"] == method && message.get("id").is_none() => {
+                    return Ok(Some(message["params"].clone()));
+                }
+                Ok(message) if Instant::now() < deadline => self.remember_notification(message),
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err("授权程序已退出。".into()),
+            }
+        }
+    }
+
+    fn remember_notification(&mut self, message: Value) {
+        if message.get("id").is_some() || !message["method"].is_string() {
+            return;
+        }
+        if self.notifications.len() >= 16 {
+            self.notifications.pop_front();
+        }
+        self.notifications.push_back(message);
+    }
+
     pub(crate) fn start(command: &mut Command, framing: Framing) -> Result<Self, String> {
         let child = ManagedChild::start(
             command
@@ -216,6 +257,7 @@ impl Session {
             outgoing: Some(outgoing),
             framing,
             messages,
+            notifications: VecDeque::new(),
             next_id: 0,
         })
     }
@@ -273,6 +315,7 @@ impl Session {
                     .cloned()
                     .ok_or_else(|| "授权程序返回 RPC 错误。".into());
             }
+            self.remember_notification(response);
             if Instant::now() >= deadline {
                 return Err("授权程序响应超时。".into());
             }

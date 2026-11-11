@@ -1,6 +1,8 @@
 use super::{
     builtin, io,
-    model::{path_valid, History, Manifest, Permission, Project, MAX_FILES, MAX_PROJECT},
+    model::{
+        path_valid, BindingHint, History, Manifest, Permission, Project, MAX_FILES, MAX_PROJECT,
+    },
     now, runner,
 };
 use crate::{device::Device, SNAPSHOT_EVENT};
@@ -11,7 +13,10 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -98,7 +103,7 @@ impl Draft {
             .and_then(|definition| serde_json::to_string_pretty(&definition).ok())
             .unwrap_or_else(|| self.definition.clone());
         let source = format!(
-            "import {{ defineModule }} from '@tdisplay/sdk'\nimport previous from {original}\n\nexport default defineModule({{{}\n  collect: previous.collect,\n}})\n",
+            "import {{ defineModule }} from '@mado/sdk'\nimport previous from {original}\n\nexport default defineModule({{{}\n  collect: previous.collect,\n  handlers: previous.handlers,\n}})\n",
             definition_members(&metadata)
         );
         self.files.insert(entry.clone(), source);
@@ -121,6 +126,8 @@ impl Draft {
             files: self.files.clone(),
             inputs: Value::Null,
             sampled_at: 0,
+            action: None,
+            state: Value::Null,
         })
         .map_err(|error| format!("入口脚本定义：{error}"))?;
         let mut inspected = self.clone();
@@ -218,6 +225,9 @@ pub struct Workspace {
     catalog: Catalog,
     tested: BTreeMap<String, (Draft, Project)>,
     status: BTreeMap<String, Status>,
+    interactions: BTreeMap<String, Interaction>,
+    refresh: std::collections::BTreeSet<String>,
+    sequence: u64,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -225,6 +235,14 @@ pub struct Workspace {
 struct Status {
     updated_at: Option<u64>,
     error: Option<String>,
+    #[serde(skip)]
+    data: Value,
+}
+
+#[derive(Clone)]
+struct Interaction {
+    name: String,
+    cancelled: Arc<AtomicBool>,
 }
 
 #[derive(Serialize)]
@@ -236,6 +254,9 @@ pub struct ModuleSummary {
     revision: Option<u64>,
     can_restore: bool,
     changed: bool,
+    actions: Vec<String>,
+    action_instance: Option<String>,
+    active_action: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -246,7 +267,9 @@ pub struct WorkspaceView {
 
 impl Workspace {
     fn save(&mut self, next: Catalog) -> Result<(), String> {
-        let bytes = serde_json::to_vec(&next).map_err(|error| error.to_string())?;
+        let mut stored = next.clone();
+        stored.modules.retain(|id, _| builtin::get(id).is_none());
+        let bytes = serde_json::to_vec(&stored).map_err(|error| error.to_string())?;
         let temp = self.path.with_extension("tmp");
         fs::write(&temp, bytes).map_err(|error| error.to_string())?;
         fs::rename(&temp, &self.path).map_err(|error| error.to_string())?;
@@ -255,40 +278,52 @@ impl Workspace {
     }
 
     fn view(&self) -> WorkspaceView {
-        let mut modules = [builtin::codex(), builtin::system()]
-            .into_iter()
-            .map(|project| ModuleSummary {
-                id: project.manifest.module_id.clone(),
-                name: project.manifest.definition.name.clone(),
-                built_in: true,
-                revision: Some(1),
-                can_restore: false,
-                changed: false,
+        let modules = self
+            .catalog
+            .modules
+            .values()
+            .map(|module| {
+                let built_in = builtin::get(&module.draft.id).is_some();
+                let action_instance = self
+                    .catalog
+                    .instances
+                    .values()
+                    .find(|instance| instance.module_id == module.draft.id && instance.enabled)
+                    .map(|instance| instance.id.clone());
+                ModuleSummary {
+                    id: module.draft.id.clone(),
+                    name: module
+                        .released
+                        .as_ref()
+                        .map(|release| release.project.manifest.definition.name.clone())
+                        .or_else(|| {
+                            serde_json::from_str::<Value>(&module.draft.definition)
+                                .ok()
+                                .and_then(|definition| {
+                                    definition["name"].as_str().map(str::to_owned)
+                                })
+                        })
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| "未命名采集器".into()),
+                    built_in,
+                    revision: module.released.as_ref().map(|release| release.revision),
+                    can_restore: module.previous.is_some(),
+                    changed: module.released.as_ref().is_none_or(|release| {
+                        module.draft.entry != release.project.manifest.entry
+                            || module.draft.files != release.project.files
+                    }),
+                    actions: module
+                        .released
+                        .as_ref()
+                        .map(|release| release.project.manifest.definition.actions.clone())
+                        .unwrap_or_default(),
+                    active_action: action_instance
+                        .as_ref()
+                        .and_then(|id| self.interactions.get(id).map(|action| action.name.clone())),
+                    action_instance,
+                }
             })
-            .collect::<Vec<_>>();
-        modules.extend(self.catalog.modules.values().map(|module| {
-            ModuleSummary {
-                id: module.draft.id.clone(),
-                name: module
-                    .released
-                    .as_ref()
-                    .map(|release| release.project.manifest.definition.name.clone())
-                    .or_else(|| {
-                        serde_json::from_str::<Value>(&module.draft.definition)
-                            .ok()
-                            .and_then(|definition| definition["name"].as_str().map(str::to_owned))
-                    })
-                    .filter(|name| !name.trim().is_empty())
-                    .unwrap_or_else(|| "未命名采集器".into()),
-                built_in: false,
-                revision: module.released.as_ref().map(|release| release.revision),
-                can_restore: module.previous.is_some(),
-                changed: module.released.as_ref().is_none_or(|release| {
-                    module.draft.entry != release.project.manifest.entry
-                        || module.draft.files != release.project.files
-                }),
-            }
-        }));
+            .collect();
         WorkspaceView {
             modules,
             status: self
@@ -304,17 +339,199 @@ impl Workspace {
     }
 
     fn draft(&self, id: &str) -> Result<Draft, String> {
-        match id {
-            "codex" => Draft::from_project(builtin::codex()).migrate(),
-            "system" => Draft::from_project(builtin::system()).migrate(),
-            _ => self
-                .catalog
-                .modules
-                .get(id)
-                .map(|module| module.draft.clone())
-                .ok_or("找不到采集模块。".into()),
+        self.catalog
+            .modules
+            .get(id)
+            .map(|module| module.draft.clone())
+            .ok_or("找不到采集模块。".into())
+    }
+}
+
+#[tauri::command]
+pub fn run_collector_action(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    id: String,
+    action: String,
+) -> Result<(), String> {
+    command_window(&window)?;
+    run_action(&app, &id, &action)
+}
+
+#[tauri::command]
+pub fn cancel_collector_action(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    command_window(&window)?;
+    cancel_action(&app, &id)
+}
+
+pub(crate) const STATUS_EVENT: &str = "collector-status";
+
+pub(crate) fn instance_status(app: &AppHandle, id: &str) -> Result<Value, String> {
+    let state = app.state::<Mutex<Workspace>>();
+    let workspace = state.lock().map_err(|error| error.to_string())?;
+    let instance = workspace
+        .catalog
+        .instances
+        .get(id)
+        .ok_or("找不到采集实例。")?;
+    let status = workspace.status.get(id);
+    Ok(json!({
+        "sequence": workspace.sequence,
+        "enabled": instance.enabled,
+        "settings": instance.settings,
+        "data": status.map(|status| &status.data),
+        "error": status.and_then(|status| status.error.as_deref()),
+        "action": workspace.interactions.get(id).map(|action| &action.name),
+    }))
+}
+
+fn suggest_binding(home: &Path, hint: &BindingHint) -> Option<String> {
+    match hint {
+        BindingHint::Executable { name } => {
+            let name = if cfg!(windows) {
+                format!("{name}.exe")
+            } else {
+                name.clone()
+            };
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            std::env::split_paths(&path)
+                .filter(|path| path.is_absolute())
+                .chain([
+                    home.join(".local/bin"),
+                    PathBuf::from("/opt/homebrew/bin"),
+                    PathBuf::from("/usr/local/bin"),
+                ])
+                .filter_map(|path| path.join(&name).into_os_string().into_string().ok())
+                .find_map(|path| io::normalize_target("stdio", "程序", &path).ok())
+        }
+        BindingHint::UserDirectory { path, environment } => {
+            let directory = std::env::var_os(environment)
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .unwrap_or_else(|| home.join(path));
+            io::normalize_target("directory", "目录", directory.to_str()?).ok()
         }
     }
+}
+
+pub(crate) fn configure_bundled(
+    app: &AppHandle,
+    id: &str,
+    enabled: bool,
+    overrides: Option<BTreeMap<String, String>>,
+) -> Result<(), String> {
+    let project = builtin::get(id).ok_or("找不到随包采集器。")?;
+    let definition = &project.manifest.definition;
+    let bindings = if let Some(overrides) = overrides {
+        let home = app.path().home_dir().map_err(|error| error.to_string())?;
+        let mut bindings = BTreeMap::new();
+        for (alias, hint) in &definition.suggested_bindings {
+            if let Some(path) = overrides.get(alias).filter(|path| !path.trim().is_empty()) {
+                let permission = &definition.permissions[alias];
+                let scope = json!(permission);
+                let kind = scope["kind"].as_str().unwrap_or_default();
+                bindings.insert(format!("explicit.{alias}"), path.clone());
+                if let Ok(path) = io::normalize_target(kind, permission.label(), path) {
+                    bindings.insert(alias.clone(), path);
+                }
+            } else if let Some(path) = suggest_binding(&home, hint) {
+                bindings.insert(alias.clone(), path);
+            }
+        }
+        Some(bindings)
+    } else {
+        None
+    };
+    let state = app.state::<Mutex<Workspace>>();
+    let mut workspace = state.lock().map_err(|error| error.to_string())?;
+    let mut catalog = workspace.catalog.clone();
+    let instance = catalog.instances.get_mut(id).ok_or("找不到采集实例。")?;
+    instance.enabled = enabled;
+    if let Some(bindings) = bindings {
+        instance.settings = bindings;
+        instance.approved_permissions = definition.permissions.clone();
+    }
+    workspace.save(catalog)?;
+    if let Some(interaction) = workspace.interactions.remove(id) {
+        interaction.cancelled.store(true, Ordering::Relaxed);
+    }
+    workspace.status.remove(id);
+    workspace.refresh.insert(id.to_owned());
+    workspace.sequence += 1;
+    drop(workspace);
+    super::publish_readings(app, id, BTreeMap::new());
+    let _ = app.emit(STATUS_EVENT, id);
+    Ok(())
+}
+
+pub(crate) fn refresh_instance(app: &AppHandle, id: &str) -> Result<(), String> {
+    let state = app.state::<Mutex<Workspace>>();
+    let mut workspace = state.lock().map_err(|error| error.to_string())?;
+    if workspace
+        .catalog
+        .instances
+        .get(id)
+        .is_some_and(|instance| instance.enabled)
+    {
+        workspace.refresh.insert(id.to_owned());
+    }
+    Ok(())
+}
+
+pub(crate) fn run_action(app: &AppHandle, id: &str, name: &str) -> Result<(), String> {
+    let state = app.state::<Mutex<Workspace>>();
+    let mut workspace = state.lock().map_err(|error| error.to_string())?;
+    let instance = workspace
+        .catalog
+        .instances
+        .get(id)
+        .filter(|instance| instance.enabled)
+        .ok_or("请先启用采集器。")?;
+    let project = workspace
+        .catalog
+        .modules
+        .get(&instance.module_id)
+        .and_then(|module| module.released.as_ref())
+        .map(|release| &release.project)
+        .ok_or("找不到已发布的采集器。")?;
+    if !project
+        .manifest
+        .definition
+        .actions
+        .iter()
+        .any(|action| action == name)
+    {
+        return Err("采集器未声明该操作。".into());
+    }
+    if workspace.interactions.contains_key(id) {
+        return Err("采集器操作正在进行。".into());
+    }
+    workspace.interactions.insert(
+        id.to_owned(),
+        Interaction {
+            name: name.to_owned(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        },
+    );
+    workspace.sequence += 1;
+    drop(workspace);
+    let _ = app.emit(STATUS_EVENT, id);
+    Ok(())
+}
+
+pub(crate) fn cancel_action(app: &AppHandle, id: &str) -> Result<(), String> {
+    let state = app.state::<Mutex<Workspace>>();
+    let mut workspace = state.lock().map_err(|error| error.to_string())?;
+    if let Some(interaction) = workspace.interactions.remove(id) {
+        interaction.cancelled.store(true, Ordering::Relaxed);
+        workspace.sequence += 1;
+        let _ = app.emit(STATUS_EVENT, id);
+    }
+    Ok(())
 }
 
 fn create_template(name: String, template: &str) -> Result<Draft, String> {
@@ -355,7 +572,7 @@ fn create_template(name: String, template: &str) -> Result<Draft, String> {
     let definition =
         serde_json::to_string_pretty(&definition).map_err(|error| error.to_string())?;
     let source = format!(
-        "import {{ defineModule }} from '@tdisplay/sdk'\n\nexport default defineModule({{{}\n\n  async collect({}) {{\n    {body}\n  }},\n}})\n",
+        "import {{ defineModule }} from '@mado/sdk'\n\nexport default defineModule({{{}\n\n  async collect({}) {{\n    {body}\n  }},\n}})\n",
         definition_members(&definition),
         if template == "sample" { "" } else { "settings, context" },
     );
@@ -375,11 +592,47 @@ pub fn start(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let directory = app.path().app_config_dir()?;
     fs::create_dir_all(&directory)?;
     let path = directory.join("collectors.json");
-    let catalog: Catalog = match fs::read(&path) {
+    let mut catalog: Catalog = match fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Catalog::default(),
         Err(error) => return Err(error.into()),
     };
+    for project in builtin::projects() {
+        let id = &project.manifest.module_id;
+        let definition = &project.manifest.definition;
+        let schedule = definition
+            .schedule
+            .as_ref()
+            .expect("bundled collector schedule");
+        catalog.modules.insert(
+            id.clone(),
+            Module {
+                draft: Draft::from_project(project),
+                released: Some(Release {
+                    revision: 1,
+                    project: project.clone(),
+                }),
+                previous: None,
+            },
+        );
+        let instance = catalog
+            .instances
+            .entry(id.clone())
+            .or_insert_with(|| Instance {
+                id: id.clone(),
+                module_id: id.clone(),
+                name: definition.name.clone(),
+                settings: BTreeMap::new(),
+                approved_permissions: definition.permissions.clone(),
+                refresh_seconds: schedule.refresh_seconds,
+                enabled: schedule.enabled,
+            });
+        instance.refresh_seconds = schedule.refresh_seconds;
+        // Bundled paths stay as previously authorized. Updated grants require explicit reconfiguration.
+        if instance.approved_permissions != definition.permissions {
+            instance.enabled = false;
+        }
+    }
     {
         let device = app.state::<Mutex<Device>>();
         let mut device = device.lock().map_err(|error| error.to_string())?;
@@ -389,7 +642,9 @@ pub fn start(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 .get(&instance.module_id)
                 .and_then(|module| module.released.as_ref())
             {
-                release.project.validate(false)?;
+                release
+                    .project
+                    .validate(builtin::get(&instance.module_id).is_some())?;
                 device.install_widgets(
                     &instance.id,
                     release.project.widgets(&instance.id, &instance.name),
@@ -402,6 +657,9 @@ pub fn start(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         catalog,
         tested: BTreeMap::new(),
         status: BTreeMap::new(),
+        interactions: BTreeMap::new(),
+        refresh: Default::default(),
+        sequence: 0,
     }));
     let app = app.clone();
     thread::spawn(move || poll_sources(app));
@@ -428,9 +686,9 @@ pub async fn open_collectors(app: AppHandle) -> Result<(), String> {
         .iter()
         .find(|window| window.label == "main")
         .cloned()
-        .ok_or("找不到 Studio 主窗口配置。")?;
+        .ok_or("找不到 Mado 主窗口配置。")?;
     config.label = "collectors".into();
-    config.title = "TDisplay Studio · 数据采集器".into();
+    config.title = "Mado Studio · 数据采集器".into();
     config.width = 1080.0;
     config.height = 720.0;
     config.min_width = Some(790.0);
@@ -519,6 +777,9 @@ pub fn save_collector(
     mut draft: Draft,
 ) -> Result<(), String> {
     command_window(&window)?;
+    if builtin::get(&draft.id).is_some() {
+        return Err("随包采集器由应用更新管理。".into());
+    }
     let mut state = state.lock().map_err(|error| error.to_string())?;
     let mut catalog = state.catalog.clone();
     let module = catalog
@@ -597,7 +858,7 @@ fn plan_sources(
         || definition.permissions.values().any(|permission| {
             !matches!(
                 permission,
-                Permission::Http { .. } | Permission::System { .. }
+                Permission::Http { .. } | Permission::System { .. } | Permission::Browser { .. }
             )
         });
     let plan = move || {
@@ -662,7 +923,8 @@ fn plan_sources(
                 };
                 let mut changed = !existing
                     || !approved
-                    || (kind != "system" && (target.is_none() || target.as_ref() != saved));
+                    || (!matches!(kind, "system" | "browser")
+                        && (target.is_none() || target.as_ref() != saved));
                 if io::is_path_resource(kind) && (live || source.enabled || changed) {
                     if let Some(path) = declared.or(target.as_ref()) {
                         target = match io::normalize_target(kind, resource, path) {
@@ -721,7 +983,7 @@ impl PlannedSources {
                 let mut targets = BTreeMap::new();
                 for request in self.requests {
                     let kind = request.scope["kind"].as_str().expect("resource kind");
-                    if kind == "system" {
+                    if matches!(kind, "system" | "browser") {
                         continue;
                     }
                     let target = request
@@ -763,6 +1025,9 @@ impl PlannedSources {
 }
 
 fn publication_project(workspace: &Workspace, id: &str, restore: bool) -> Result<Project, String> {
+    if builtin::get(id).is_some() {
+        return Err("随包采集器由应用更新管理。".into());
+    }
     let module = workspace.catalog.modules.get(id).ok_or("找不到采集器。")?;
     if restore {
         return module
@@ -843,8 +1108,7 @@ pub async fn test_collector(
             }
             draft
         };
-        let mut project =
-            draft.inspected_project(matches!(id.as_str(), "codex" | "system"), !live)?;
+        let mut project = draft.inspected_project(builtin::get(&id).is_some(), !live)?;
         let mut response = if live {
             let planned = {
                 let state = state.lock().map_err(|error| error.to_string())?;
@@ -988,7 +1252,7 @@ pub fn publish_collector(
         workspace.status.remove(&source);
     }
     *device = staged;
-    let _ = app.emit(SNAPSHOT_EVENT, device.snapshot());
+    let _ = app.emit(SNAPSHOT_EVENT, crate::display_wire::local_snapshot(&device.snapshot()));
     Ok(workspace.view())
 }
 
@@ -1037,6 +1301,8 @@ fn request(project: &Project, inputs: Value, sampled_at: u64) -> runner::Request
         files: project.files.clone(),
         inputs,
         sampled_at,
+        action: None,
+        state: Value::Null,
     }
 }
 
@@ -1145,6 +1411,7 @@ struct Schedule {
     next_run: Instant,
     run: Option<u64>,
     history: History,
+    state: Value,
 }
 
 struct Finished {
@@ -1152,6 +1419,7 @@ struct Finished {
     instance: Instance,
     revision: u64,
     result: Result<(u64, super::model::Collected), String>,
+    interaction: Option<Interaction>,
 }
 
 fn execute_live(
@@ -1159,6 +1427,17 @@ fn execute_live(
     instance: &Instance,
     client: &reqwest::blocking::Client,
     at: u64,
+) -> Result<runner::ResultData, String> {
+    execute_with_state(project, instance, client, at, Value::Null, None)
+}
+
+fn execute_with_state(
+    project: &Project,
+    instance: &Instance,
+    client: &reqwest::blocking::Client,
+    at: u64,
+    state: Value,
+    interaction: Option<Interaction>,
 ) -> Result<runner::ResultData, String> {
     if project.manifest.sdk_api_version == 1 {
         let inputs = read_inputs(project, instance, client)?;
@@ -1170,23 +1449,103 @@ fn execute_live(
     }
     let settings = io::settings(definition, &instance.settings)?;
     let mut broker = io::Broker::live(definition, instance.settings.clone(), client.clone());
-    runner::isolated_with(request(project, settings, at), move |call| {
-        broker.call(call)
-    })
+    let mut job = request(project, settings, at);
+    job.state = state;
+    if let Some(action) = interaction {
+        job.action = Some(action.name);
+        broker = broker.interactive(action.cancelled);
+    }
+    runner::isolated_with(job, move |call| broker.call(call))
 }
 
 fn collect_instance(
     project: &Project,
     instance: &Instance,
     client: &reqwest::blocking::Client,
+    state: Value,
+    interaction: Option<Interaction>,
 ) -> Result<(u64, super::model::Collected), String> {
     let at = now();
-    let response = execute_live(project, instance, client, at)?;
+    let response = execute_with_state(project, instance, client, at, state, interaction)?;
     let result = response
         .result
         .ok_or_else(|| response.error.unwrap_or_else(|| "采集无结果。".into()))?;
     project.validate_outputs(&result)?;
     Ok((at, result))
+}
+
+pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
+    let mut arguments = arguments.into_iter();
+    let path = arguments.next().ok_or(
+        "用法：mado-studio --collect <插件目录> [--grant 名称=路径] [--setting 名称=值] [--action 操作]",
+    )?;
+    let mut project = transfer::read_project(Path::new(&path), true)?;
+    if project.manifest.definition_in_script {
+        let draft = Draft::from_project(&project);
+        project = draft.inspected_project(true, false)?;
+    }
+    let definition = &project.manifest.definition;
+    let mut bindings = BTreeMap::new();
+    let mut interaction = None;
+    while let Some(flag) = arguments.next() {
+        let value = arguments
+            .next()
+            .ok_or_else(|| format!("缺少 {flag} 的值。"))?;
+        if flag == "--action" {
+            if interaction.is_some() || !definition.actions.contains(&value) {
+                return Err("操作未声明或重复指定。".into());
+            }
+            interaction = Some(Interaction {
+                name: value,
+                cancelled: Arc::new(AtomicBool::new(false)),
+            });
+            continue;
+        }
+        let (alias, value) = value.split_once('=').ok_or("参数应为 名称=值。")?;
+        let value = match flag.as_str() {
+            "--grant" => {
+                let (kind, label) = if let Some(permission) = definition.permissions.get(alias) {
+                    let scope = json!(permission);
+                    let kind = scope["kind"].as_str().unwrap_or_default();
+                    if matches!(kind, "browser" | "system") {
+                        return Err("此能力无需绑定路径。".into());
+                    }
+                    (kind.to_owned(), permission.label())
+                } else if let Some(input) = definition.inputs.get(alias) {
+                    (input.kind.clone(), input.label.as_str())
+                } else {
+                    return Err(format!("插件未声明资源 {alias}。"));
+                };
+                io::normalize_target(&kind, label, value)?
+            }
+            "--setting" if definition.settings.contains_key(alias) => value.to_owned(),
+            _ => return Err(format!("未知参数 {flag} 或未声明设置 {alias}。")),
+        };
+        if bindings.insert(alias.into(), value).is_some() {
+            return Err(format!("参数 {alias} 重复。"));
+        }
+    }
+    let instance = Instance {
+        id: project.manifest.module_id.clone(),
+        module_id: project.manifest.module_id.clone(),
+        name: definition.name.clone(),
+        settings: bindings,
+        approved_permissions: definition.permissions.clone(),
+        refresh_seconds: 60,
+        enabled: true,
+    };
+    validate_instance(&project, &instance)?;
+    let (_, mut result) = collect_instance(
+        &project,
+        &instance,
+        &http_client()?,
+        Value::Null,
+        interaction,
+    )?;
+    result.state = Value::Null;
+    let output = serde_json::to_string(&result).map_err(|error| error.to_string())?;
+    println!("{output}");
+    Ok(())
 }
 
 fn poll_sources(app: AppHandle) {
@@ -1202,6 +1561,20 @@ fn poll_sources(app: AppHandle) {
         };
         for finished in receiver.try_iter() {
             active -= 1;
+            let cancelled = finished
+                .interaction
+                .as_ref()
+                .is_some_and(|interaction| interaction.cancelled.load(Ordering::Relaxed));
+            if let Some(interaction) = &finished.interaction {
+                if workspace
+                    .interactions
+                    .get(&finished.instance.id)
+                    .is_some_and(|active| Arc::ptr_eq(&active.cancelled, &interaction.cancelled))
+                {
+                    workspace.interactions.remove(&finished.instance.id);
+                    workspace.sequence += 1;
+                }
+            }
             let Some(task) = tasks.get_mut(&finished.instance.id) else {
                 continue;
             };
@@ -1210,6 +1583,10 @@ fn poll_sources(app: AppHandle) {
             }
             task.run = None;
             task.next_run = Instant::now() + Duration::from_secs(task.instance.refresh_seconds);
+            if cancelled {
+                task.next_run = Instant::now();
+                continue;
+            }
             let instance = &finished.instance;
             if workspace.catalog.instances.get(&instance.id) != Some(instance) {
                 continue;
@@ -1225,6 +1602,7 @@ fn poll_sources(app: AppHandle) {
             };
             match finished.result {
                 Ok((at, result)) => {
+                    task.state = result.state;
                     let values = task.history.project(
                         &release.project,
                         &instance.id,
@@ -1237,6 +1615,7 @@ fn poll_sources(app: AppHandle) {
                         Status {
                             updated_at: Some(at),
                             error: None,
+                            data: result.status,
                         },
                     );
                     super::publish_readings(&app, &instance.id, values);
@@ -1249,6 +1628,8 @@ fn poll_sources(app: AppHandle) {
                         .error = Some(error);
                 }
             }
+            workspace.sequence += 1;
+            let _ = app.emit(STATUS_EVENT, &instance.id);
         }
         tasks.retain(|id, _| {
             workspace
@@ -1267,6 +1648,18 @@ fn poll_sources(app: AppHandle) {
                     .is_some_and(|at| now().saturating_sub(at) >= instance.refresh_seconds * 3000)
             {
                 super::publish_readings(&app, id, BTreeMap::new());
+            }
+        }
+        let refresh = std::mem::take(&mut workspace.refresh);
+        let mut refresh_pending = std::collections::BTreeSet::new();
+        for id in &refresh {
+            if let Some(task) = tasks.get_mut(id) {
+                if task.run.is_none() {
+                    task.next_run = Instant::now();
+                    task.state = Value::Null;
+                } else {
+                    refresh_pending.insert(id.clone());
+                }
             }
         }
         for instance in workspace
@@ -1298,30 +1691,41 @@ fn poll_sources(app: AppHandle) {
                         next_run: Instant::now(),
                         run: None,
                         history: History::default(),
+                        state: Value::Null,
                     },
                 );
             }
             let task = tasks.get_mut(&instance.id).expect("scheduled instance");
-            if task.run.is_none() && task.next_run <= Instant::now() {
+            let interaction = workspace.interactions.get(&instance.id).cloned();
+            if task.run.is_none() && (task.next_run <= Instant::now() || interaction.is_some()) {
                 let instance = instance.clone();
                 let release = release.clone();
                 let sender = sender.clone();
                 let client = client.clone();
+                let state = task.state.clone();
                 sequence += 1;
                 let run = sequence;
                 task.run = Some(run);
                 active += 1;
                 thread::spawn(move || {
-                    let result = collect_instance(&release.project, &instance, &client);
+                    let result = collect_instance(
+                        &release.project,
+                        &instance,
+                        &client,
+                        state,
+                        interaction.clone(),
+                    );
                     let _ = sender.send(Finished {
                         run,
                         instance,
                         revision: release.revision,
                         result,
+                        interaction,
                     });
                 });
             }
         }
+        workspace.refresh.extend(refresh_pending);
         drop(workspace);
         thread::sleep(Duration::from_millis(250));
     }

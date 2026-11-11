@@ -22,6 +22,10 @@ fn read_file(path: &Path, limit: usize) -> Result<String, String> {
 }
 
 fn load_project(root: &Path) -> Result<Project, String> {
+    read_project(root, false)
+}
+
+pub(super) fn read_project(root: &Path, standalone: bool) -> Result<Project, String> {
     let manifest: Manifest =
         serde_json::from_str(&read_file(&root.join("manifest.json"), 128 * 1024)?)
             .map_err(|error| format!("模块清单：{error}"))?;
@@ -77,7 +81,7 @@ fn load_project(root: &Path) -> Result<Project, String> {
         files,
         fixture,
     };
-    project.validate(false)?;
+    project.validate(standalone)?;
     Ok(project)
 }
 

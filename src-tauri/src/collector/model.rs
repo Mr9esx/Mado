@@ -45,8 +45,19 @@ pub struct Definition {
     pub schedule: Option<CollectionSchedule>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resources: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+    #[serde(rename = "suggestedBindings", alias = "suggested_bindings", default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub suggested_bindings: BTreeMap<String, BindingHint>,
     pub outputs: BTreeMap<String, Output>,
     pub widgets: BTreeMap<String, WidgetSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum BindingHint {
+    Executable { name: String },
+    UserDirectory { path: String, environment: String },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -93,6 +104,14 @@ pub enum Permission {
         label: String,
         args: Vec<String>,
         methods: Vec<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        versionless: bool,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        environment: BTreeMap<String, String>,
+    },
+    Browser {
+        label: String,
+        hosts: Vec<String>,
     },
     System {
         label: String,
@@ -111,6 +130,7 @@ impl Permission {
             | Self::Directory { label }
             | Self::Process { label, .. }
             | Self::Stdio { label, .. }
+            | Self::Browser { label, .. }
             | Self::System { label } => label,
         }
     }
@@ -137,14 +157,39 @@ impl Permission {
                 Self::Process { args, .. } => {
                     !args.is_empty() && args.len() <= 12 && args.iter().all(|set| args_valid(set))
                 }
-                Self::Stdio { args, methods, .. } => {
+                Self::Stdio {
+                    args,
+                    methods,
+                    environment,
+                    ..
+                } => {
                     args_valid(args)
+                        && environment.len() <= 8
+                        && environment.iter().all(|(key, alias)| {
+                            !key.is_empty()
+                                && key.len() <= 48
+                                && key
+                                    .bytes()
+                                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                                && key_valid(alias)
+                        })
                         && !methods.is_empty()
                         && methods.len() <= 24
                         && methods.iter().all(|method| {
                             !method.is_empty()
                                 && method.len() <= 100
                                 && method.split('/').all(key_valid)
+                        })
+                }
+                Self::Browser { hosts, .. } => {
+                    !hosts.is_empty()
+                        && hosts.len() <= 8
+                        && hosts.iter().all(|host| {
+                            host.len() <= 253
+                                && host.contains('.')
+                                && host.bytes().all(|byte| {
+                                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')
+                                })
                         })
                 }
                 _ => true,
@@ -177,6 +222,14 @@ pub struct WidgetSpec {
     pub format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_animation: Option<crate::device::NumberAnimation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub state_styles: BTreeMap<String, crate::device::StateStyle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail_fields: Vec<crate::device::DetailField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expired_text: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub state_labels: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -226,6 +279,10 @@ pub struct Collected {
     pub outputs: Fields,
     #[serde(default)]
     pub notifications: Vec<String>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub state: Value,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub status: Value,
 }
 
 pub fn key_valid(key: &str) -> bool {
@@ -275,10 +332,12 @@ impl Project {
                 || target.len() > 4096
                 || target.chars().any(char::is_control)
                 || !(definition.inputs.contains_key(key)
-                    || definition
-                        .permissions
-                        .get(key)
-                        .is_some_and(|permission| !matches!(permission, Permission::System { .. })))
+                    || definition.permissions.get(key).is_some_and(|permission| {
+                        !matches!(
+                            permission,
+                            Permission::System { .. } | Permission::Browser { .. }
+                        )
+                    }))
         }) {
             return Err("resources 只能绑定已声明的文件、程序或网络资源。".into());
         }
@@ -290,7 +349,9 @@ impl Project {
         {
             return Err("请在 resources 中填写 HTTP 资源的地址。".into());
         }
-        if definition.settings.len() > 12
+        if definition.actions.len() > 8
+            || definition.actions.iter().any(|name| !key_valid(name))
+            || definition.settings.len() > 12
             || definition.permissions.len() > 12
             || definition.settings.iter().any(|(key, setting)| {
                 !key_valid(key)
@@ -304,6 +365,28 @@ impl Project {
                 .any(|(key, permission)| !key_valid(key) || !permission.valid())
         {
             return Err("普通参数或资源授权的定义无效。".into());
+        }
+        if definition.suggested_bindings.iter().any(|(key, hint)| {
+            match (hint, definition.permissions.get(key)) {
+                (
+                    BindingHint::Executable { name },
+                    Some(Permission::Process { .. } | Permission::Stdio { .. }),
+                ) => !key_valid(name),
+                (
+                    BindingHint::UserDirectory { path, environment },
+                    Some(Permission::Directory { .. }),
+                ) => {
+                    !path_valid(path)
+                        || environment.is_empty()
+                        || environment.len() > 48
+                        || !environment
+                            .bytes()
+                            .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                }
+                _ => true,
+            }
+        }) {
+            return Err("建议资源路径与权限不匹配。".into());
         }
         if manifest.module_id.len() > 128 || !manifest.module_id.split('.').all(key_valid) {
             return Err("模块 ID 无效。".into());
@@ -392,7 +475,6 @@ impl Project {
                             chart.series == "bar"
                                 && (1..=3600).contains(&chart.range_seconds)
                                 && (1..=12).contains(&chart.sample_count)
-                                && chart.range_seconds * 1000 % chart.sample_count as u64 == 0
                                 && chart.min < chart.max
                         })
                 }
@@ -423,6 +505,40 @@ impl Project {
                 || widget.trend.is_some() != (widget.kind == "trend")
                 || widget.range.is_some() != (widget.kind == "range")
                 || (widget.supports_notify && widget.kind != "state")
+                || widget
+                    .accent_color
+                    .as_deref()
+                    .is_some_and(|color| !crate::device::is_hex_color(color))
+                || (widget.number_animation.is_some()
+                    && (!matches!(
+                        widget.kind.as_str(),
+                        "metric" | "progress" | "trend" | "range"
+                    ) || widget.format.as_deref() == Some("countdown")))
+                || (!widget.state_styles.is_empty() && !widget.supports_notify)
+                || widget.state_styles.iter().any(|(state, style)| {
+                    !widget.state_labels.contains_key(state)
+                        || !crate::device::valid_state_style(style)
+                })
+                || widget.expired_text.as_deref().is_some_and(|text| {
+                    widget.format.as_deref() != Some("countdown") || !label_valid(text)
+                })
+                || widget.detail_fields.len() > 2
+                || (!widget.detail_fields.is_empty()
+                    && !widget
+                        .supported_spans
+                        .iter()
+                        .any(|span| span.w == 2 && span.h == 2))
+                || widget
+                    .detail_fields
+                    .iter()
+                    .enumerate()
+                    .any(|(index, field)| {
+                        !output.detail_keys.contains(&field.key)
+                            || !label_valid(&field.label)
+                            || widget.detail_fields[..index]
+                                .iter()
+                                .any(|prior| prior.key == field.key)
+                    })
                 || !key_valid(key)
                 || !label_valid(&widget.label)
                 || !widget
@@ -537,13 +653,31 @@ impl Project {
                 kind: widget.kind.clone(),
                 state_labels: widget.state_labels.clone(),
                 accent_color: widget.accent_color.clone(),
+                supports_notify: widget.supports_notify,
+                number_animation: widget.number_animation,
+                state_styles: widget.state_styles.clone(),
+                detail_fields: widget.detail_fields.clone(),
+                format: widget.format.clone(),
+                expired_text: widget.expired_text.clone(),
+                chart: widget
+                    .chart
+                    .as_ref()
+                    .and_then(|value| serde_json::to_value(value).ok()),
+                trend: widget
+                    .trend
+                    .as_ref()
+                    .and_then(|value| serde_json::to_value(value).ok()),
+                range: widget
+                    .range
+                    .as_ref()
+                    .and_then(|value| serde_json::to_value(value).ok()),
             })
             .collect()
     }
 }
 
 #[derive(Default)]
-pub struct History(BTreeMap<String, VecDeque<(u64, f64)>>);
+pub struct History(BTreeMap<String, VecDeque<(u64, Option<f64>)>>);
 
 impl History {
     pub fn project(
@@ -568,31 +702,28 @@ impl History {
             {
                 samples.pop_front();
             }
-            if let Some(value) = value["value"].as_f64() {
-                samples.push_back((at, value));
-            }
+            samples.push_back((at, value["value"].as_f64()));
         }
         windows.iter().filter_map(|(key, widget)| {
-            let reading = outputs.get(&widget.output_key)?.as_object()?;
-            let mut payload = Value::Object(reading.clone());
-            if let Some(chart) = &widget.chart {
+            let reading = outputs.get(&widget.output_key)?;
+            let mut payload = if let Some(chart) = &widget.chart {
                 let start = at.saturating_sub(chart.range_seconds * 1000);
-                let step = chart.range_seconds * 1000 / chart.sample_count as u64;
                 let mut slots = vec![None; chart.sample_count];
-                for &(time, sample) in self.0.get(&widget.output_key).into_iter().flatten() {
-                    if time > start && time <= at {
-                        let index = ((time - start - 1) / step) as usize;
-                        if let Some(slot) = slots.get_mut(index) {
-                            *slot = Some(sample);
-                        }
-                    }
+                let samples = self.0.get(&widget.output_key).into_iter().flatten().rev()
+                    .filter(|(time, _)| (start..=at).contains(time));
+                for (slot, &(_, sample)) in slots.iter_mut().rev().zip(samples) {
+                    *slot = sample;
                 }
-                payload = json!({ "windowEndUnixMs": at, "values": slots, "min": chart.min, "max": chart.max });
-            } else if let Some(trend) = &widget.trend {
+                json!({ "windowEndUnixMs": at, "values": slots, "min": chart.min, "max": chart.max })
+            } else {
+                Value::Object(reading.as_object()?.clone())
+            };
+            if let Some(trend) = &widget.trend {
                 let target = at.saturating_sub(trend.comparison_seconds * 1000);
                 let previous = self.0.get(&widget.output_key).into_iter().flatten().rev()
-                    .find(|(time, _)| *time <= target && target - *time <= 60_000);
-                payload["delta"] = json!(previous.and_then(|(_, previous)| payload["value"].as_f64().map(|value| value - previous)));
+                    .filter(|(time, _)| *time <= target && target - *time <= 60_000)
+                    .find_map(|&(_, sample)| sample);
+                payload["delta"] = json!(previous.and_then(|previous| payload["value"].as_f64().map(|value| value - previous)));
                 payload["deltaUnit"] = json!(trend.delta_unit);
             } else if let Some(range) = &widget.range {
                 if range.mode == "fixed" {

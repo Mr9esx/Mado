@@ -32,3 +32,9 @@ test('an older single-page snapshot remains editable without losing its layout',
   assert.equal(restored.length, 1)
   assert.deepEqual(restored[0].layout, [card])
 })
+
+test('a card appearance change dirties the page draft', () => {
+  const page = { id: 'test', name: '测试', layout: [{ id: 'quota', x: 0, y: 0, w: 1, h: 1 }] }
+  const changed = { ...page, layout: [{ ...page.layout[0], appearance: { numberAnimation: 'digitRoll' } }] }
+  assert.equal(samePages([page], [changed]), false)
+})

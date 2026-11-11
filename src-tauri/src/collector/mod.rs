@@ -30,6 +30,6 @@ fn publish_readings(app: &AppHandle, source: &str, values: BTreeMap<String, Widg
         .ok()
         .and_then(|mut device| device.update_source_values(source, values));
     if let Some(snapshot) = snapshot {
-        let _ = app.emit(SNAPSHOT_EVENT, snapshot);
+        let _ = app.emit(SNAPSHOT_EVENT, crate::display_wire::local_snapshot(&snapshot));
     }
 }

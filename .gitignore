@@ -3,3 +3,10 @@
 /src-tauri/target/
 /src-tauri/gen/
 .DS_Store
+/firmware/build/
+/firmware/managed_components/
+/firmware/sdkconfig
+/firmware/sdkconfig.old
+/firmware/vendor/
+/firmware/assets/*.bin
+/firmware/tools/__pycache__/

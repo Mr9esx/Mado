@@ -11,12 +11,12 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::{
     collections::BTreeMap,
-    io::Read,
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::Command,
     sync::{
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc, Arc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, Instant},
@@ -187,12 +187,50 @@ struct Rpc {
     params: Option<Value>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FindFiles {
+    path: String,
+    prefix: String,
+    suffix: String,
+    depth: usize,
+    modified_since: u64,
+    limit: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReadWindow {
+    path: String,
+    #[serde(default)]
+    head_bytes: u64,
+    #[serde(default)]
+    tail_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Receive {
+    method: String,
+    timeout_ms: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenUrl {
+    url: String,
+}
+
 enum Operation {
     Http(Http),
     List(String),
     ReadText(String),
+    FindFiles(FindFiles),
+    ReadWindow(ReadWindow),
     Run(Vec<String>),
     Rpc(Rpc, bool),
+    Receive(Receive),
+    Browser(reqwest::Url),
     System,
 }
 
@@ -250,6 +288,28 @@ impl Operation {
                 }
                 Ok(Self::Run(requested))
             }
+            ("findFiles", Permission::Directory { .. }) => {
+                let options: FindFiles = parse(&call.params)?;
+                if !path_valid(&options.path)
+                    || !(1..=6).contains(&options.depth)
+                    || !(1..=32).contains(&options.limit)
+                    || options.prefix.len() > 64
+                    || options.suffix.len() > 64
+                {
+                    return Err(denied());
+                }
+                Ok(Self::FindFiles(options))
+            }
+            ("readWindow", Permission::Directory { .. }) => {
+                let options: ReadWindow = parse(&call.params)?;
+                if !path_valid(&options.path)
+                    || options.head_bytes > 256 * 1024
+                    || options.tail_bytes > 2 * 1024 * 1024
+                {
+                    return Err(denied());
+                }
+                Ok(Self::ReadWindow(options))
+            }
             ("rpc" | "notify", Permission::Stdio { methods, .. }) => {
                 let rpc: Rpc = parse(&call.params)?;
                 if !methods.contains(&rpc.method)
@@ -263,6 +323,25 @@ impl Operation {
                 Ok(Self::Rpc(rpc, call.operation == "notify"))
             }
             ("system", Permission::System { .. }) => Ok(Self::System),
+            ("receive", Permission::Stdio { methods, .. }) => {
+                let receive: Receive = parse(&call.params)?;
+                if !methods.contains(&receive.method) || receive.timeout_ms > 1000 {
+                    return Err(denied());
+                }
+                Ok(Self::Receive(receive))
+            }
+            ("openUrl", Permission::Browser { hosts, .. }) => {
+                let url = url(&parse::<OpenUrl>(&call.params)?.url)?;
+                if url.scheme() != "https"
+                    || url.port_or_known_default() != Some(443)
+                    || !url
+                        .host_str()
+                        .is_some_and(|host| hosts.iter().any(|value| value == host))
+                {
+                    return Err(denied());
+                }
+                Ok(Self::Browser(url))
+            }
             _ => Err(denied()),
         }
     }
@@ -280,6 +359,7 @@ pub struct Broker {
     permissions: BTreeMap<String, Permission>,
     mode: Mode,
     deadline: Instant,
+    cancelled: Option<Arc<AtomicBool>>,
 }
 
 enum Mode {
@@ -310,6 +390,7 @@ impl Broker {
                 permissions: definition.permissions.clone(),
                 mode: Mode::Mock(mocks),
                 deadline: Instant::now() + Duration::from_secs(12),
+                cancelled: None,
             },
         ))
     }
@@ -322,6 +403,7 @@ impl Broker {
         Self {
             permissions: definition.permissions.clone(),
             deadline: Instant::now() + Duration::from_secs(12),
+            cancelled: None,
             mode: Mode::Live {
                 bindings,
                 client,
@@ -330,8 +412,21 @@ impl Broker {
         }
     }
 
+    pub fn interactive(mut self, cancelled: Arc<AtomicBool>) -> Self {
+        self.deadline = Instant::now() + Duration::from_secs(185);
+        self.cancelled = Some(cancelled);
+        self
+    }
+
     pub fn call(&mut self, call: Call) -> Result<Value, String> {
         let now = Instant::now();
+        if self
+            .cancelled
+            .as_ref()
+            .is_some_and(|cancelled| cancelled.load(Ordering::Relaxed))
+        {
+            return Err("操作已取消。".into());
+        }
         if now >= self.deadline {
             return Err("采集已超时。".into());
         }
@@ -362,7 +457,15 @@ impl Broker {
                 });
         };
         if let Operation::System = operation {
-            return Ok(super::builtin::system_readings());
+            return Ok(system_readings());
+        }
+        if let Operation::Browser(url) = operation {
+            if self.cancelled.is_none() {
+                return Err("打开浏览器需要用户发起插件操作。".into());
+            }
+            tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
+                .map_err(|_| "无法打开默认浏览器。".to_string())?;
+            return Ok(Value::Null);
         }
         let value = bindings.get(&call.alias).ok_or("资源尚未授权。")?;
         let deadline = self.deadline.min(now + CALL_TIMEOUT);
@@ -379,18 +482,55 @@ impl Broker {
                     read(checked_path(&value)?, &path, &permission)
                 })
             }
+            Operation::FindFiles(options) => {
+                let value = value.clone();
+                filesystem(deadline, move || find_files(checked_path(&value)?, options))
+            }
+            Operation::ReadWindow(options) => {
+                let value = value.clone();
+                filesystem(deadline, move || {
+                    read_window(checked_path(&value)?, options)
+                })
+            }
             Operation::Run(args) => {
                 let program = executable(value, deadline)?;
                 process::run(command(program).args(args), deadline)
             }
             Operation::Rpc(rpc, notify) => {
                 if !sessions.contains_key(&call.alias) {
-                    let Permission::Stdio { args, .. } = permission else {
+                    let Permission::Stdio {
+                        args,
+                        versionless,
+                        environment,
+                        ..
+                    } = permission
+                    else {
                         unreachable!()
                     };
                     let program = executable(value, deadline)?;
-                    let session =
-                        Session::start(command(program).args(args), process::Framing::JsonRpc)?;
+                    let mut command = command(program);
+                    command.args(args);
+                    for key in ["HOME", "USERPROFILE"] {
+                        if let Some(value) = std::env::var_os(key) {
+                            command.env(key, value);
+                        }
+                    }
+                    let path = std::env::var_os("PATH").unwrap_or_default();
+                    let search = std::env::split_paths(&path).filter(|path| path.is_absolute());
+                    #[cfg(target_os = "macos")]
+                    let search = search.chain(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].map(PathBuf::from));
+                    if let Ok(path) = std::env::join_paths(search) { command.env("PATH", path); }
+                    for (key, alias) in environment {
+                        if let Some(value) = bindings.get(alias) {
+                            command.env(key, value);
+                        }
+                    }
+                    let framing = if *versionless {
+                        process::Framing::Versionless
+                    } else {
+                        process::Framing::JsonRpc
+                    };
+                    let session = Session::start(&mut command, framing)?;
                     sessions.insert(call.alias.clone(), session);
                 }
                 let session = sessions.get_mut(&call.alias).expect("opened session");
@@ -401,7 +541,17 @@ impl Broker {
                     session.request(&rpc.method, rpc.params, deadline)
                 }
             }
-            Operation::System => unreachable!(),
+            Operation::Receive(receive) => {
+                if self.cancelled.is_none() {
+                    return Err("等待通知需要用户发起插件操作。".into());
+                }
+                let session = sessions.get_mut(&call.alias).ok_or("授权程序尚未启动。")?;
+                let deadline = deadline.min(now + Duration::from_millis(receive.timeout_ms));
+                Ok(session
+                    .receive(&receive.method, deadline)?
+                    .unwrap_or(Value::Null))
+            }
+            Operation::System | Operation::Browser(_) => unreachable!(),
         }
     }
 }
@@ -508,8 +658,7 @@ fn list(root: PathBuf, path: &str) -> Result<Value, String> {
     ))
 }
 
-fn read(root: PathBuf, path: &str, permission: &Permission) -> Result<Value, String> {
-    let single_file = matches!(permission, Permission::File { .. });
+fn open_file(root: PathBuf, path: &str, single_file: bool) -> Result<cap_std::fs::File, String> {
     let (dir, path) = if single_file {
         (
             dir(root.parent().ok_or("文件路径无效。")?)?,
@@ -537,7 +686,135 @@ fn read(root: PathBuf, path: &str, permission: &Permission) -> Result<Value, Str
     if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
         return Err("请选择授权范围内的普通文件。".into());
     }
+    Ok(file)
+}
+fn read(root: PathBuf, path: &str, permission: &Permission) -> Result<Value, String> {
+    let file = open_file(root, path, matches!(permission, Permission::File { .. }))?;
     Ok(json!(read_text(file, BYTE_LIMIT)?))
+}
+
+fn read_window(root: PathBuf, options: ReadWindow) -> Result<Value, String> {
+    let mut file = open_file(root, &options.path, false)?;
+    let size = file.metadata().map_err(|_| "无法读取文件大小。")?.len();
+    let mut head = Vec::new();
+    BufReader::new((&mut file).take(options.head_bytes))
+        .read_until(b'\n', &mut head)
+        .map_err(|_| "无法读取文件首行。")?;
+    let offset = size.saturating_sub(options.tail_bytes);
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|_| "无法定位文件末尾。")?;
+    let mut tail = Vec::new();
+    file.take(options.tail_bytes)
+        .read_to_end(&mut tail)
+        .map_err(|_| "无法读取文件末尾。")?;
+    let start = if offset == 0 {
+        0
+    } else {
+        tail.iter()
+            .position(|&byte| byte == b'\n')
+            .map_or(tail.len(), |index| index + 1)
+    };
+    Ok(
+        json!({ "head": String::from_utf8_lossy(&head), "tail": String::from_utf8_lossy(&tail[start..]) }),
+    )
+}
+
+fn find_files(root: PathBuf, options: FindFiles) -> Result<Value, String> {
+    let directory = dir(root)?;
+    let mut pending = vec![(options.path.clone(), 1)];
+    let mut found = Vec::new();
+    let mut seen = 0;
+    while let Some((path, depth)) = pending.pop() {
+        let Ok(entries) = directory.read_dir(&path) else {
+            continue;
+        };
+        for entry in entries {
+            seen += 1;
+            if seen > 20_000 {
+                return Err("目录查询超过 20000 项。".into());
+            }
+            let Ok(entry) = entry else { continue };
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let child = format!("{path}/{name}");
+            if !path_valid(&child) {
+                continue;
+            }
+            if kind.is_dir() && depth < options.depth {
+                pending.push((child, depth + 1));
+            } else if depth == options.depth
+                && kind.is_file()
+                && name.starts_with(&options.prefix)
+                && name.ends_with(&options.suffix)
+            {
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                let Some(modified) = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.into_std().duration_since(std::time::UNIX_EPOCH).ok())
+                else {
+                    continue;
+                };
+                let modified = modified.as_millis() as u64;
+                if modified >= options.modified_since {
+                    found.push((modified, child, metadata.len()));
+                }
+            }
+        }
+    }
+    found.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    found.truncate(options.limit);
+    Ok(json!(found
+        .into_iter()
+        .map(|(modified, path, size)| {
+            json!({ "path": path, "modified": modified, "size": size })
+        })
+        .collect::<Vec<_>>()))
+}
+
+fn system_readings() -> Value {
+    struct Sampler {
+        metrics: sysinfo::System,
+        refreshed: Instant,
+    }
+    static SAMPLER: OnceLock<Mutex<Sampler>> = OnceLock::new();
+    let sampler = SAMPLER.get_or_init(|| {
+        let mut metrics = sysinfo::System::new();
+        metrics.refresh_cpu_usage();
+        thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        metrics.refresh_cpu_usage();
+        metrics.refresh_memory();
+        Mutex::new(Sampler {
+            metrics,
+            refreshed: Instant::now(),
+        })
+    });
+    let Ok(mut sampler) = sampler.lock() else {
+        return Value::Null;
+    };
+    if sampler.refreshed.elapsed() >= sysinfo::MINIMUM_CPU_UPDATE_INTERVAL {
+        sampler.metrics.refresh_cpu_usage();
+        sampler.metrics.refresh_memory();
+        sampler.refreshed = Instant::now();
+    }
+    let metrics = &sampler.metrics;
+    let total = metrics.total_memory();
+    json!({
+        "cpuUsagePercent": f64::from(metrics.global_cpu_usage()),
+        "memoryUsedBytes": metrics.used_memory(),
+        "memoryTotalBytes": total,
+        "cpuPercent": (metrics.global_cpu_usage() * 10.0).round() / 10.0,
+        "memoryPercent": (total != 0).then(|| {
+            (1000.0 * metrics.used_memory() as f64 / total as f64).round() / 10.0
+        }),
+        "uptimeSeconds": sysinfo::System::uptime(),
+    })
 }
 
 #[cfg(test)]

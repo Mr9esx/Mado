@@ -4,6 +4,22 @@ import systemModule from '../shared/collectors/system/manifest.json' with { type
 import type { PowerStatus } from './status'
 
 export type Cell = { x: number; y: number }
+export type NumberAnimation = 'none' | 'digitRoll' | 'count'
+export type StateStyle = { color?: string; alertText?: string; alertDurationMs?: number }
+export type CardAppearance = {
+  accentColor?: string
+  numberAnimation?: NumberAnimation
+  stateStyles?: Record<string, StateStyle>
+}
+export type Palette = { background: string; surface: string; text: string }
+export type ThemeName = 'dark' | 'light'
+export type DisplayTheme = { active: ThemeName; dark: Palette; light: Palette }
+export const defaultDisplayTheme: DisplayTheme = {
+  active: 'dark',
+  dark: { background: '#1E1E1E', surface: '#4A4A4A', text: '#F1F1F1' },
+  light: { background: '#E3E3E3', surface: '#FAFAFA', text: '#242424' },
+}
+
 export type Widget = {
   id: string
   group: string
@@ -15,8 +31,17 @@ export type Widget = {
   sizes: number[][]
   stateLabels?: Record<string, string>
   accentColor?: string
+  supportsNotify?: boolean
+  numberAnimation?: NumberAnimation
+  stateStyles?: Record<string, StateStyle>
+  detailFields?: { key: string; label: string }[]
+  format?: string
+  expiredText?: string
+  chart?: { series: 'bar'; rangeSeconds: number; sampleCount: number; min: number; max: number }
+  trend?: { comparisonSeconds: number; deltaUnit?: string | null }
+  range?: { mode: 'fixed' | 'reading'; min?: number; max?: number }
 }
-export type LayoutItem = Cell & { id: string; w: number; h: number }
+export type LayoutItem = Cell & { id: string; w: number; h: number; appearance?: CardAppearance }
 export type DisplayPage = { id: string; name: string; layout: LayoutItem[] }
 export type TaskReading = {
   state: 'running' | 'completed' | 'interrupted' | 'error' | 'unknown'
@@ -36,9 +61,21 @@ export type Reading = {
   deltaUnit?: string | null
   bounds?: { min: number; max: number }
   notify?: boolean
+  details?: Record<string, string>
 }
 export type WidgetValue = number | TaskReading | Reading
+export type LocalDisplayFrame = {
+  config: {
+    theme: DisplayTheme
+    pages: { pageId: string; cards: { cardId: string; render: Partial<Widget> & { label: string } }[] }[]
+  }
+  readings: Record<string, Reading | null>
+  sourceIds: Record<string, string>
+  configRevision: number
+  sequence: number
+}
 export type Snapshot = {
+  displayFrame?: LocalDisplayFrame
   pages?: DisplayPage[]
   activePageId?: string
   rotationSeconds?: number
@@ -47,22 +84,30 @@ export type Snapshot = {
   layout: LayoutItem[]
   widgets?: Widget[]
   appliedWidgets?: Widget[]
-  values: Record<string, WidgetValue>
+  values: Record<string, WidgetValue | null>
   lastSyncedAt: number | null
+  lastReadingsAt?: number | null
+  theme?: DisplayTheme
   power: PowerStatus
 }
 
-const definitions = [codexModule, systemModule].flatMap(module => Object.entries(module.widgets).map(([key, widget]): Widget => {
+export type WidgetDefinition = Pick<Widget, 'kind' | 'format' | 'accentColor' | 'stateLabels' | 'stateStyles'
+  | 'supportsNotify' | 'numberAnimation' | 'chart' | 'trend' | 'range' | 'detailFields' | 'expiredText'> & {
+  outputKey: string; label: string; shortLabel?: string; supportedSpans: { w: number; h: number }[]
+}
+
+const definitions = [codexModule, systemModule].flatMap(module => Object.entries(module.widgets).map(([key, definition]): Widget => {
+  const { outputKey, label, shortLabel, supportedSpans, ...render } = definition as WidgetDefinition
   const outputs: Record<string, { valueType: string; unit?: string }> = module.outputs
   return {
+    ...render,
     id: module.moduleId === 'codex' ? key : module.moduleId + '.' + key,
     group: module.moduleId,
     groupName: module.name,
-    name: widget.label,
-    shortName: 'shortLabel' in widget ? widget.shortLabel : widget.label,
-    unit: outputs[widget.outputKey].unit ?? '',
-    sizes: widget.supportedSpans.map(span => [span.w, span.h]),
-    kind: widget.kind,
+    name: label,
+    shortName: shortLabel ?? label,
+    unit: outputs[outputKey].unit ?? '',
+    sizes: supportedSpans.map(span => [span.w, span.h]),
   }
 }))
 export const display = { ...geometry, widgets: definitions }
@@ -70,7 +115,7 @@ const bundledWidgets = new Map<string, Widget>(display.widgets.map((widget) => [
 export const widgetCatalog = (snapshot?: Snapshot) => snapshot?.widgets
   ? new Map(snapshot.widgets.map((widget) => [widget.id, widget])) : bundledWidgets
 export const gridWidth = display.width - display.padding * 2
-export const gridHeight = display.height - display.padding * 2 - display.gap - display.statusHeight
+export const gridHeight = display.height - 2 * display.padding - display.gap - display.statusHeight
 export const cellWidth = (gridWidth - display.gap * (display.columns - 1)) / display.columns
 export const cellHeight = (gridHeight - display.gap * (display.rows - 1)) / display.rows
 
@@ -109,5 +154,32 @@ export function cellAt(rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>,
 
 export function sameLayout(left: LayoutItem[], right: LayoutItem[]) {
   return left.length === right.length && left.every((item) => right.some((other) =>
-    item.id === other.id && item.x === other.x && item.y === other.y && item.w === other.w && item.h === other.h))
+    item.id === other.id && item.x === other.x && item.y === other.y && item.w === other.w && item.h === other.h
+    && sameAppearance(item.appearance, other.appearance)))
+}
+
+function sameAppearance(a?: CardAppearance, b?: CardAppearance) {
+  if (a?.accentColor !== b?.accentColor || a?.numberAnimation !== b?.numberAnimation) return false
+  const left = a?.stateStyles ?? {}
+  const right = b?.stateStyles ?? {}
+  return Object.keys(left).length === Object.keys(right).length
+    && Object.entries(left).every(([state, style]) => {
+      const other = right[state]
+      return other && style.color === other.color && style.alertText === other.alertText
+        && style.alertDurationMs === other.alertDurationMs
+    })
+}
+
+export function cardWidget(widget: Widget, appearance?: CardAppearance): Widget {
+  if (!appearance) return widget
+  const stateStyles = { ...widget.stateStyles }
+  for (const [state, style] of Object.entries(appearance.stateStyles ?? {})) {
+    stateStyles[state] = { ...stateStyles[state], ...style }
+  }
+  return {
+    ...widget,
+    accentColor: appearance.accentColor ?? widget.accentColor,
+    numberAnimation: appearance.numberAnimation ?? widget.numberAnimation,
+    stateStyles,
+  }
 }

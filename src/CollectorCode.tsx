@@ -41,7 +41,7 @@ function completion(context: CompletionContext, file: string, draft: Draft) {
     options = properties(v2 ? ['settings', 'calls', 'operation', 'alias', 'params', 'result'] : Object.keys(definition.inputs ?? {}))
   } else if (/\b(?:from|import)\s*['"][^'"]*$/.test(before)) {
     const parent = file.split('/').slice(0, -1)
-    options = ['@tdisplay/sdk', ...Object.keys(draft.files).filter(path => path !== file && /\.m?js$/.test(path)).map(path => {
+    options = ['@mado/sdk', ...Object.keys(draft.files).filter(path => path !== file && /\.m?js$/.test(path)).map(path => {
       const pieces = path.split('/')
       let common = 0
       while (common < parent.length && parent[common] === pieces[common]) common++
@@ -77,7 +77,7 @@ function completion(context: CompletionContext, file: string, draft: Draft) {
       snippetCompletion(v2
         ? "defineModule({\n  name: '${name}',\n  schedule: { refreshSeconds: 60, enabled: true },\n  outputs: { ${} },\n  widgets: {},\n  async collect(settings, context) {\n    return { outputs: { ${} } }\n  },\n})"
         : "defineModule({\n  name: '${name}',\n  outputs: { ${} },\n  widgets: {},\n  collect(inputs, context) {\n    return { outputs: { ${} } }\n  },\n})", {
-        label: 'defineModule', type: 'function', detail: 'TDisplay SDK',
+        label: 'defineModule', type: 'function', detail: 'Mado SDK',
       }),
       ...(file === draft.entry ? properties(['name', 'schedule', 'refreshSeconds', 'enabled', 'resources',
         ...(v2 ? ['settings', 'permissions', 'default', 'methods', 'args'] : ['inputs']),

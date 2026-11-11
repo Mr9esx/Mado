@@ -1,23 +1,27 @@
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Screen } from '../../src/Screen'
-import { PageManager } from '../../src/PageManager'
+import { PageManager, PagePlayback } from '../../src/PageManager'
 import { WidgetShell } from '../../src/WidgetShell'
 import { nextPageId } from '../../src/pages'
 import { WidgetReading } from '../../src/WidgetReading'
-import type { Snapshot, Widget } from '../../src/layout'
+import { CardSettings } from '../../src/CardSettings'
+import { defaultDisplayTheme, type LayoutItem, type Snapshot, type Widget } from '../../src/layout'
 import '../../src/styles.css'
 import '../../src/collector.css'
 
 const definitions: Widget[] = [
-  { id: 'quota', name: '剩余额度', shortName: '额度', kind: 'progress', unit: '%' },
-  { id: 'speed', name: '输出速度', shortName: '输出速度', kind: 'metric', unit: 'tok/s' },
-  { id: 'task', name: '任务状态', shortName: '任务状态', kind: 'state', unit: '' },
+  { id: 'quota', name: '剩余额度', shortName: '额度', kind: 'progress', unit: '%', accentColor: '#48B34A',
+    detailFields: [{ key: 'window', label: '窗口' }] },
+  { id: 'speed', name: '输出速度', shortName: '输出速度', kind: 'metric', unit: 'tok/s', numberAnimation: 'digitRoll' as const },
+  { id: 'task', name: '任务状态', shortName: '任务状态', kind: 'state', unit: '', supportsNotify: true,
+    stateLabels: { running: '运行中', completed: '已完成', error: '运行异常' },
+    stateStyles: { running: { color: '#397ADC' }, completed: { color: '#48B34A' }, error: { color: '#D63F41' } } },
   { id: 'resets', name: '重置卡', shortName: '重置卡', kind: 'metric', unit: '张' },
   { id: 'recovery', name: '额度恢复', shortName: '额度恢复', kind: 'countdown', unit: '' },
-].map(widget => ({ ...widget, group: 'codex', sizes: [[1, 1]] }))
+].map(widget => ({ ...widget, group: 'codex', sizes: [[1, 1], [2, 1], [2, 2], [4, 1]] } as Widget))
 const system: Widget[] = [
-  { id: 'cpu', name: 'CPU 占用', shortName: 'CPU 占用', kind: 'chart', unit: '%' },
+  { id: 'cpu', name: 'CPU占用', shortName: 'CPU占用', kind: 'chart', unit: '%' },
   { id: 'trend', name: 'CPU 趋势', shortName: 'CPU 趋势', kind: 'trend', unit: '%' },
   { id: 'range', name: 'CPU 区间', shortName: 'CPU 区间', kind: 'range', unit: '%' },
   { id: 'number', name: '数值缩写', shortName: '数值缩写', kind: 'metric', unit: 'tok/s' },
@@ -29,7 +33,7 @@ const placements = (widgets: Widget[]) => widgets.map((widget, index) => ({ id: 
 const base: Snapshot = {
   revision: 1, sequence: 1, lastSyncedAt: new Date(2026, 10, 10, 17, 29, 30).getTime() / 1000,
   layout: placements(definitions), widgets: definitions, power: { source: 'battery', percent: 100 },
-  values: { quota: { kind: 'progress', value: 81, ratio: .81 }, speed: 248, resets: 0,
+  values: { quota: { kind: 'progress', value: 81, ratio: .81, details: { window: '5 小时' } }, speed: 248, resets: 0,
     recovery: Date.now() / 1000 + 5 * 86400 + 4 * 3600,
     task: { kind: 'state', state: 'running', detail: '整理设备屏显示和同步状态' } },
 }
@@ -48,6 +52,9 @@ function Preview() {
   const step = (direction: number) => setPageId(nextPageId(pages, pageId, direction) ?? pages[0].id)
   const [selected, setSelected] = useState('')
   const [title, setTitle] = useState('整理设备屏显示和同步状态')
+  const [card, setCard] = useState<LayoutItem>({ id: 'quota', x: 0, y: 0, w: 1, h: 1 })
+  const [editing, setEditing] = useState(false)
+  const longError = '请检查 USB 数据线和 Studio 连接设置。\n'.repeat(24)
   const update = (state: string, notify: boolean) => setSnapshot(current => ({ ...current, sequence: current.sequence + 1,
     values: { ...current.values, task: { kind: 'state', state, detail: title, notify } } }))
   return <main style={{ padding: 24, color: '#222', background: '#eeede9', minHeight: '100vh' }}>
@@ -59,6 +66,7 @@ function Preview() {
       <button onClick={() => update('error', true)}>异常提醒</button>
       <button onClick={() => setSnapshot(current => ({ ...current, sequence: current.sequence + 1, values: { ...current.values, speed: 80 } }))}>速度 80</button>
       <button onClick={() => setSnapshot(current => ({ ...current, sequence: current.sequence + 1, values: { ...current.values, speed: 90 } }))}>速度 90</button>
+      <button onClick={() => setEditing(true)}>组件设置</button>
     </div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 320px)', gap: '20px 24px' }}>
       {(['dark', 'light'] as const).map(theme => <section key={theme}><p>{theme} · Codex</p><Screen theme={theme} layout={snapshot.layout} snapshot={snapshot} /></section>)}
@@ -68,8 +76,9 @@ function Preview() {
       <section><p>桌面控件 · 未连接硬件、尚未应用</p><Screen surface="desktop" layout={base.layout} snapshot={{ ...base, lastSyncedAt: null }} /></section>
       <section><p>桌面控件 · 已应用</p><Screen surface="desktop" layout={cpu.layout} snapshot={cpu} /></section>
       <section><p>多页管理与工具栏交互</p>
-        <PageManager pages={pages} selected={currentPage.id} rotationSeconds={rotation} disabled={false}
-          onSelect={setPageId} onRotationChange={setRotation} onChange={(next, selected) => { setPages(next); if (selected) setPageId(selected) }} />
+        <PagePlayback seconds={rotation} disabled={false} onChange={setRotation} />
+        <PageManager pages={pages} selected={currentPage.id} disabled={false}
+          onSelect={setPageId} onChange={(next, selected) => { setPages(next); if (selected) setPageId(selected) }} />
         <WidgetShell onPageStep={step} tools={<><button aria-label="上一页" onClick={() => step(-1)}>‹</button><button aria-label="下一页" onClick={() => step(1)}>›</button></>}>
           <Screen surface="desktop" pages={pages} pageId={currentPage.id} layout={currentPage.layout} onPageChange={() => step(1)}
             snapshot={{ ...base, widgets: [...definitions, ...system], values: { ...base.values, ...cpu.values } }} />
@@ -77,7 +86,20 @@ function Preview() {
       </section>
       <section><p>等待连接</p><Screen layout={[]} /></section>
       <section><p>等待同步</p><Screen layout={base.layout} snapshot={{ ...base, lastSyncedAt: null }} /></section>
+      <section><p>跨格 · 2 × 2、1 × 2</p><Screen snapshot={snapshot} layout={[
+        { id: 'quota', x: 0, y: 0, w: 2, h: 2 },
+        { id: 'speed', x: 2, y: 0, w: 2, h: 1 },
+        { id: 'task', x: 2, y: 1, w: 2, h: 1 },
+      ]} /></section>
+      <section><p>跨格 · 1 × 4</p><Screen snapshot={snapshot} layout={[
+        { id: 'task', x: 0, y: 0, w: 4, h: 1 }, { ...card, y: 1, h: 1 },
+      ]} /></section>
+      <section><p>连接失败 · 长原因</p><Screen layout={[]} connection={{ phase: 'failed', reason: longError }} /></section>
+      <section><p>断线保留 · 充电</p><Screen layout={base.layout} snapshot={snapshot}
+        connection={{ phase: 'disconnected', hasLayout: true, firmwareVersion: '0.1.0', power: { source: 'battery', percent: null, charging: true } }} /></section>
     </div>
+    {editing && <CardSettings item={card} widget={definitions[0]} theme={defaultDisplayTheme} onChange={setCard}
+      fits={item => item.y + item.h <= 2} onDismiss={() => setEditing(false)} />}
   </main>
 }
 createRoot(document.getElementById('root')!).render(<Preview />)

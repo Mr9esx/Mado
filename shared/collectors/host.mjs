@@ -20,11 +20,17 @@
     files: {
       list: (alias, path = '') => invoke('list', alias, { path }),
       readText: (alias, path = '') => invoke('readText', alias, { path }),
+      find: (alias, options) => invoke('findFiles', alias, options),
+      readWindow: (alias, path, options) => invoke('readWindow', alias, { ...options, path }),
     },
     process: {
       run: (alias, args = []) => invoke('run', alias, { args }),
       request: (alias, method, params) => invoke('rpc', alias, { method, params }),
       notify: (alias, method, params) => invoke('notify', alias, { method, params }),
+      receive: (alias, method, timeoutMs = 1000) => invoke('receive', alias, { method, timeoutMs }),
+    },
+    interaction: {
+      openUrl: (alias, url) => invoke('openUrl', alias, { url }),
     },
     system: {
       read: alias => invoke('system', alias, {}),

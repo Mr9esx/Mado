@@ -3,15 +3,22 @@
   "name": "Codex",
   "sdkApiVersion": 2,
   "entry": "index.mjs",
-  "settings": {
-    "mode": { "label": "采集模式", "default": "account" }
+  "schedule": { "refreshSeconds": 5, "enabled": false },
+  "actions": ["login"],
+  "suggestedBindings": {
+    "appServer": { "kind": "executable", "name": "codex" },
+    "logs": { "kind": "userDirectory", "path": ".codex", "environment": "CODEX_HOME" }
   },
   "permissions": {
     "appServer": {
       "kind": "stdio", "label": "Codex App Server",
       "args": ["app-server", "--listen", "stdio://"],
-      "methods": ["account/read", "account/rateLimits/read"]
-    }
+      "versionless": true,
+      "environment": { "CODEX_HOME": "logs" },
+      "methods": ["initialize", "initialized", "account/read", "account/rateLimits/read", "account/login/start", "account/login/completed"]
+    },
+    "logs": { "kind": "directory", "label": "Codex 会话目录" },
+    "loginBrowser": { "kind": "browser", "label": "Codex 官方登录页面", "hosts": ["chatgpt.com", "auth.openai.com"] }
   },
   "outputs": {
     "quota": { "valueType": "progress", "unit": "%" },
@@ -21,13 +28,19 @@
     "task": { "valueType": "state", "stateKeys": ["running", "completed", "interrupted", "error", "unknown"] }
   },
   "widgets": {
-    "quota": { "outputKey": "quota", "kind": "progress", "label": "剩余额度", "shortLabel": "额度", "supportedSpans": [{ "w": 1, "h": 1 }] },
-    "speed": { "outputKey": "speed", "kind": "metric", "label": "响应速度", "shortLabel": "速度", "supportedSpans": [{ "w": 1, "h": 1 }] },
-    "resets": { "outputKey": "resets", "kind": "metric", "label": "重置卡", "supportedSpans": [{ "w": 1, "h": 1 }] },
-    "quota-reset": { "outputKey": "quotaReset", "kind": "metric", "format": "countdown", "label": "额度恢复倒计时", "shortLabel": "额度恢复", "supportedSpans": [{ "w": 1, "h": 1 }] },
+    "quota": { "outputKey": "quota", "kind": "progress", "label": "剩余额度", "shortLabel": "额度", "accentColor": "#48B34A", "numberAnimation": "count", "supportedSpans": [{ "w": 1, "h": 1 }, { "w": 2, "h": 1 }, { "w": 2, "h": 2 }, { "w": 4, "h": 1 }] },
+    "speed": { "outputKey": "speed", "kind": "metric", "label": "响应速度", "shortLabel": "速度", "accentColor": "#397ADC", "numberAnimation": "count", "supportedSpans": [{ "w": 1, "h": 1 }, { "w": 2, "h": 1 }, { "w": 2, "h": 2 }, { "w": 4, "h": 1 }] },
+    "resets": { "outputKey": "resets", "kind": "metric", "label": "重置卡", "supportedSpans": [{ "w": 1, "h": 1 }, { "w": 2, "h": 1 }, { "w": 2, "h": 2 }, { "w": 4, "h": 1 }] },
+    "quota-reset": { "outputKey": "quotaReset", "kind": "metric", "format": "countdown", "label": "额度恢复倒计时", "shortLabel": "额度恢复", "supportedSpans": [{ "w": 1, "h": 1 }, { "w": 2, "h": 1 }, { "w": 2, "h": 2 }, { "w": 4, "h": 1 }] },
     "task": {
-      "outputKey": "task", "kind": "state", "label": "任务状态", "supportedSpans": [{ "w": 1, "h": 1 }],
-      "stateLabels": { "running": "运行中", "completed": "已完成", "interrupted": "已中断", "error": "运行异常", "unknown": "状态未知" }
+      "outputKey": "task", "kind": "state", "label": "任务状态", "supportsNotify": true,
+      "supportedSpans": [{ "w": 1, "h": 1 }, { "w": 2, "h": 1 }, { "w": 2, "h": 2 }, { "w": 4, "h": 1 }],
+      "stateLabels": { "running": "运行中", "completed": "已完成", "interrupted": "已中断", "error": "运行异常", "unknown": "状态未知" },
+      "stateStyles": {
+        "running": { "color": "#397ADC" }, "completed": { "color": "#48B34A" },
+        "interrupted": { "color": "#DE7B3C" }, "error": { "color": "#D63F41" },
+        "unknown": { "color": "#9BA5B3" }
+      }
     }
   }
 }

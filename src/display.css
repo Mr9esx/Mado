@@ -15,7 +15,7 @@
   overflow: hidden;
   background: var(--display-screen);
   color: var(--display-ink);
-  font: 400 12px / 1 "Maple Mono NF CN", monospace;
+  font: 400 12px / 1 var(--font-mono);
 }
 .screen-grid {
   display: grid;
@@ -48,41 +48,53 @@
   overflow: hidden;
   background: var(--display-surface);
   color: var(--display-ink);
-  font: 400 12px / 1 "Maple Mono NF CN", monospace;
+  font: 400 12px / 1 var(--font-mono);
   text-align: left;
 }
 .screen-bar { position: absolute; inset: 0 0 auto; height: 4px; background: var(--widget-accent); }
 .screen-bar.is-progress { background: color-mix(in srgb, var(--display-ink) 28%, var(--display-surface)); }
 .screen-bar i { display: block; width: var(--progress-width); max-width: 100%; height: 4px; background: var(--widget-accent); }
-.screen-label { position: absolute; inset: 12px 8px auto; font-size: 12px; line-height: 14px; font-weight: 400; }
+.screen-label { position: absolute; inset: 12px 5px auto 8px; font-size: 14px; line-height: 16px; letter-spacing: 0; font-weight: 400; }
+/* Cancel the trailing tracking so only adjacent Han characters move closer. */
+.screen-label-han { letter-spacing: -2px; margin-inline-end: 2px; }
 .screen-reading { position: absolute; inset: auto 8px 8px; display: flex; align-items: flex-end; gap: 2px; height: 20px; white-space: nowrap; }
-.screen-value { min-width: 0; overflow: hidden; font-size: 20px; line-height: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.screen-value { --digit-line: 20px; min-width: 0; overflow: hidden; font-size: 20px; line-height: var(--digit-line); font-weight: 700; font-variant-numeric: tabular-nums; }
 .screen-value.is-four-char { font-size: 17px; letter-spacing: -.45px; }
+.screen-widget.is-narrow .screen-reading:has(.screen-unit[data-long]) .screen-value.is-four-char { font-size: 15px; }
+.screen-digits { display: inline-flex; }
+.screen-digit-window { display: inline-block; height: var(--digit-line); overflow: hidden; }
+.screen-digit-strip { display: flex; flex-direction: column; animation: screen-digit-roll 300ms ease-out both; }
+.screen-digit-strip > span { height: var(--digit-line); }
+@keyframes screen-digit-roll { to { transform: translateY(calc(var(--digit-line) - 100%)); } }
 .screen-unit {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   flex: none;
-  max-width: 18px;
+  max-width: 22px;
   overflow: hidden;
   white-space: normal;
   overflow-wrap: anywhere;
-  font-size: 10px;
-  line-height: 10px;
+  font-size: 11px;
+  line-height: 11px;
   font-weight: 400;
 }
 .screen-task-title { position: absolute; inset: 36px 8px auto; font-size: 20px; line-height: 20px; font-weight: 700; }
-.screen-countdown { position: absolute; inset: auto 8px 8px; height: 20px; white-space: nowrap; font-size: 20px; line-height: 20px; font-weight: 700; }
+.screen-countdown { position: absolute; inset: auto 8px 8px; height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; line-height: 20px; font-weight: 700; }
 .screen-countdown.is-compact { font-size: 17px; }
-.screen-widget.is-large .widget-face:is([data-kind="metric"], [data-kind="progress"]) .screen-reading {
-  top: 59px; bottom: auto; height: 32px;
-}
-.screen-widget.is-large .widget-face:is([data-kind="metric"], [data-kind="progress"]) .screen-value { font-size: 32px; line-height: 32px; }
+.widget-face[data-height="2"] :is(.screen-reading, .screen-countdown, .screen-task-title) { top: 35px; bottom: auto; }
+.widget-face[data-height="2"][data-has-details="false"] :is(.screen-reading, .screen-countdown, .screen-task-title) { top: 75px; transform: translateY(-50%); }
+.widget-face[data-height="2"]:is([data-kind="metric"], [data-kind="progress"]) :is(.screen-reading, .screen-countdown) { height: 32px; }
+.widget-face[data-height="2"]:is([data-kind="metric"], [data-kind="progress"]) .screen-value { --digit-line: 32px; font-size: 32px; }
+.widget-face[data-height="2"][data-kind="metric"] .screen-countdown { font-size: 32px; line-height: 32px; }
+.widget-face[data-height="2"][data-kind="metric"] .screen-countdown.is-compact { font-size: 26px; }
+.screen-details { position: absolute; inset: 84px 8px auto; font-size: 12px; line-height: 16px; }
+.screen-detail { display: block; }
 .screen-line { overflow: hidden; white-space: nowrap; }
 .screen-line-track { display: inline-flex; width: max-content; gap: 18px; }
 .screen-line.is-overflowing { mask-image: linear-gradient(to right, transparent, #000 4px, #000 calc(100% - 4px), transparent); }
 .screen-line.is-overflowing.is-holding { mask-image: linear-gradient(to right, #000, #000 calc(100% - 4px), transparent); }
-.screen-chart { position: absolute; inset: auto 8px 8px; width: calc(100% - 16px); height: 27px; fill: currentColor; }
+.screen-chart { position: absolute; inset: auto 8px 8px; width: calc(100% - 16px); height: 27px; fill: var(--widget-accent); }
 .screen-chart-value, .screen-delta, .screen-page {
   padding: 1px 3px;
   border-radius: 2px;
@@ -92,41 +104,57 @@
   line-height: 9px;
   font-weight: 700;
 }
-.screen-chart-value { position: absolute; top: 30px; left: 8px; }
-.screen-delta { flex: none; margin-left: auto; }
+.screen-chart-value { position: absolute; bottom: 24px; left: 8px; z-index: 1; max-width: calc(100% - 16px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--widget-accent); line-height: 8px; }
+.screen-delta { flex: none; margin-left: auto; max-width: 50%; overflow: hidden; text-overflow: ellipsis; }
 .screen-delta[data-direction="1"] { background: #48b34a; color: #1e1e1e; }
 .screen-delta[data-direction="-1"] { background: #d63f41; color: #fff; }
-.widget-face[data-kind="range"] .screen-reading { top: 28px; bottom: auto; }
+.widget-face[data-kind="range"][data-has-bounds="true"]:not([data-height="2"]) .screen-label { top: 10px; }
+.widget-face[data-kind="range"][data-has-bounds="true"]:not([data-height="2"]) .screen-reading { top: 30px; bottom: auto; }
 .screen-range { position: absolute; inset: auto 8px 8px; height: 6px; }
 .screen-range .rail { position: absolute; inset: 3px 0 auto; height: 1px; background: currentColor; opacity: .55; }
 .screen-range .tick { position: absolute; top: 1px; width: 1px; height: 4px; background: currentColor; }
 .screen-range .tick:nth-of-type(2) { left: 0; }
 .screen-range .tick:nth-of-type(3) { left: 50%; }
 .screen-range .tick:nth-of-type(4) { right: 0; }
-.screen-range .marker { position: absolute; top: 0; width: 3px; height: 6px; background: var(--widget-accent); transform: translateX(-50%); }
+.screen-range .marker { position: absolute; top: 0; width: 3px; height: 6px; background: var(--widget-accent); }
 .screen-status {
   position: absolute;
   inset: auto var(--screen-pad) var(--screen-pad);
   height: var(--status-height);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding-inline: 8px;
   background: var(--display-surface);
   color: var(--display-ink);
-  font: 400 12px / 12px "Maple Mono NF CN", monospace;
+  font: 400 12px / 12px var(--font-mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.screen-page-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.screen-page-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .screen-page-dots { display: flex; flex: none; flex-direction: column; gap: 1px; }
 .screen-page-dots i { width: 2px; height: 2px; border-radius: 50%; background: currentColor; }
-.screen-page { max-width: 86px; overflow: hidden; text-overflow: ellipsis; font-size: 10px; line-height: 12px; }
-.screen-info { display: grid; flex: none; font-size: 6px; line-height: 6px; }
+.screen-page { max-width: 86px; overflow: hidden; text-overflow: ellipsis; font-size: 11px; line-height: 12px; }
+.screen-info { display: grid; flex: 1 0 auto; font-size: 11px; line-height: 12px; }
+.screen-info.is-desktop { font-size: 6px; line-height: 6px; }
 .screen-status-right, .screen-power { display: flex; align-items: center; gap: 4px; flex: none; }
 .screen-status-right { margin-left: auto; }
 .screen-status svg { display: block; flex: none; }
+.screen-loading-icon { animation: screen-loading 1s linear infinite; }
+@keyframes screen-loading { to { transform: rotate(360deg); } }
 .screen-message { position: absolute; inset: var(--screen-pad) var(--screen-pad) auto; height: var(--grid-height); display: grid; place-items: center; background: var(--display-surface); font-size: 20px; line-height: 20px; }
+.screen-failure { display: block; }
+.screen-failure-title { position: absolute; inset: 8px 8px auto; display: flex; align-items: center; gap: 6px; }
+.screen-failure-title svg { flex: none; color: #d63f41; }
+.screen-failure-reason { position: absolute; inset: 32px 8px 8px; overflow: auto; scrollbar-width: none; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 14px; }
+.screen-failure-reason[data-scrolling="true"] {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--reason-top, 0px),
+    #000 calc(100% - var(--reason-bottom, 4px)), transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .screen-digit-strip { animation-duration: 0ms; }
+  .screen-loading-icon { animation: none; }
+}
 /* Editor controls are overlays; selection never changes the device's surface color. */
 .screen.is-editable .screen-widget:is(:hover, .is-selected, :focus-within)::after {
   content: ''; position: absolute; inset: 0; border: 1px solid var(--display-ink); opacity: .65; pointer-events: none;

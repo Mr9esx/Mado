@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { WidgetDefinition } from './layout'
 
 export type Draft = {
   id: string
@@ -17,6 +18,9 @@ export type ModuleSummary = {
   revision: number | null
   canRestore: boolean
   changed: boolean
+  actions: string[]
+  actionInstance: string | null
+  activeAction: string | null
 }
 
 export type Catalog = {
@@ -38,6 +42,7 @@ export type Permission = { label: string } & (
   | { kind: 'file' | 'directory' | 'system' }
   | { kind: 'process'; args: string[][] }
   | { kind: 'stdio'; args: string[]; methods: string[] }
+  | { kind: 'browser'; hosts: string[] }
 )
 
 export type GrantRequest = {
@@ -60,17 +65,7 @@ export type Definition = {
   schedule?: { refreshSeconds: number; enabled: boolean }
   resources?: Record<string, string>
   outputs?: Record<string, { valueType: string; unit?: string }>
-  widgets?: Record<string, {
-    kind: string
-    label: string
-    shortLabel?: string
-    outputKey: string
-    supportedSpans: { w: number; h: number }[]
-    stateLabels?: Record<string, string>
-    accentColor?: string
-    chart?: { sampleCount: number; min: number; max: number }
-    range?: { mode: string; min?: number; max?: number }
-  }>
+  widgets?: Record<string, WidgetDefinition>
 }
 
 function labeledFields<T extends { label: string }>(fields?: Record<string, T>) {
@@ -98,6 +93,10 @@ export function readDefinition(text: string): Definition {
 export const openCollectors = () => invoke<void>('open_collectors')
 export const focusLayout = () => invoke<void>('focus_layout')
 export const getCatalog = () => invoke<Catalog>('collector_catalog')
+export const runCollectorAction = (id: string, action: string) =>
+  invoke<void>('run_collector_action', { id, action })
+export const cancelCollectorAction = (id: string) =>
+  invoke<void>('cancel_collector_action', { id })
 export const getDraft = (id: string) => invoke<Draft>('collector_draft', { id })
 export const createDraft = (name: string, template: string) => invoke<Draft>('create_collector', { name, template })
 export const saveDraft = (draft: Draft) => invoke<void>('save_collector', { draft })

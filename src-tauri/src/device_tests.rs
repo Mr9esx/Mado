@@ -35,7 +35,7 @@ fn invalid_layout_leaves_device_revision_and_layout_intact() {
     );
 
     let mut oversized = original.layout.clone();
-    oversized[0].w = 2;
+    oversized[0].h = 2;
     assert_eq!(
         device
             .apply_layout(oversized, original.revision, 100)
@@ -311,4 +311,46 @@ fn saving_pages_is_atomic_when_the_storage_path_is_not_writable() {
     assert_eq!(device.snapshot(), initial);
     assert_eq!(std::fs::read(blocker).unwrap(), b"keep");
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn applies_and_restores_a_wide_card_with_a_custom_palette() {
+    let directory = std::env::temp_dir().join(format!("tdisplay-appearance-{}", uuid::Uuid::new_v4()));
+    let path = directory.join("pages.json");
+    let mut device = Device::new(PowerStatus::External);
+    device.attach_storage(path.clone()).unwrap();
+    let pages = serde_json::from_value(serde_json::json!([{
+        "id": "main", "name": "额度", "layout": [{
+            "id": "quota", "x": 0, "y": 0, "w": 2, "h": 2,
+            "appearance": {"accentColor": "#EFAB00", "numberAnimation": "digitRoll"}
+        }]
+    }])).unwrap();
+    let theme = serde_json::from_value(serde_json::json!({
+        "active": "light",
+        "light": {"background": "#E3E3E3", "surface": "#FFFFFF", "text": "#111111"},
+        "dark": {"background": "#1E1E1E", "surface": "#4A4A4A", "text": "#F1F1F1"}
+    })).unwrap();
+    let applied = device.apply_display(pages, 5, Some(theme), 0, 100).unwrap();
+    let mut restored = Device::new(PowerStatus::External);
+    restored.attach_storage(path).unwrap();
+    let restored = restored.snapshot();
+    assert_eq!(restored.pages, applied.pages);
+    assert_eq!(restored.theme, applied.theme);
+    assert_eq!(restored.rotation_seconds, 5);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn plugin_cannot_remove_a_state_with_an_applied_style() {
+    let mut device = Device::new(PowerStatus::External);
+    let layout = serde_json::from_value(serde_json::json!([{
+        "id": "task", "x": 0, "y": 0, "w": 1, "h": 1,
+        "appearance": {"stateStyles": {"completed": {"alertDurationMs": 1000}}}
+    }])).unwrap();
+    device.apply_layout(layout, 0, 100).unwrap();
+    let before = device.snapshot();
+    let mut changed = before.widgets.iter().filter(|widget| widget.group == "codex").cloned().collect::<Vec<_>>();
+    changed.iter_mut().find(|widget| widget.id == "task").unwrap().state_labels.remove("completed");
+    assert!(device.install_widgets("codex", changed).is_err());
+    assert_eq!(device.snapshot(), before);
 }

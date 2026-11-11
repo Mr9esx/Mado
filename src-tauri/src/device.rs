@@ -4,13 +4,85 @@ use std::{
     path::PathBuf,
 };
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NumberAnimation {
+    None,
+    DigitRoll,
+    Count,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_duration_ms: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardAppearance {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accent_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    number_animation: Option<NumberAnimation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    state_styles: BTreeMap<String, StateStyle>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct Palette {
+    background: String,
+    surface: String,
+    text: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DisplayTheme {
+    active: String,
+    dark: Palette,
+    light: Palette,
+}
+
+pub fn is_hex_color(value: &str) -> bool {
+    value.len() == 7 && value.as_bytes()[0] == b'#' && value.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+}
+
+pub fn valid_state_style(style: &StateStyle) -> bool {
+    style.color.as_deref().is_none_or(is_hex_color)
+        && style.alert_text.as_deref().is_none_or(|value| value == "auto" || is_hex_color(value))
+        && style.alert_duration_ms.is_none_or(|ms| ms <= 10000 && ms % 1000 == 0)
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LayoutItem {
     id: String,
     x: u8,
     y: u8,
     w: u8,
     h: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    appearance: Option<CardAppearance>,
+}
+
+impl LayoutItem {
+    fn appearance_fits(&self, widget: &Widget) -> bool {
+        self.appearance.as_ref().is_none_or(|appearance| {
+            let numeric = matches!(widget.kind.as_str(), "metric" | "progress" | "trend" | "range")
+                && widget.format.as_deref() != Some("countdown");
+            appearance.accent_color.as_deref().is_none_or(is_hex_color)
+                && (appearance.number_animation.is_none() || numeric)
+                && (appearance.state_styles.is_empty() || widget.supports_notify)
+                && appearance.state_styles.iter().all(|(state, style)| {
+                    widget.state_labels.contains_key(state) && valid_state_style(style)
+                })
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -27,9 +99,11 @@ struct SavedPages {
     active_page_id: String,
     rotation_seconds: u32,
     last_synced_at: Option<u64>,
+    #[serde(default)]
+    theme: Option<DisplayTheme>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Widget {
     pub id: String,
@@ -45,6 +119,30 @@ pub struct Widget {
     pub state_labels: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent_color: Option<String>,
+    #[serde(default)]
+    pub supports_notify: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_animation: Option<NumberAnimation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub state_styles: BTreeMap<String, StateStyle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail_fields: Vec<DetailField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expired_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trend: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DetailField {
+    pub key: String,
+    pub label: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -65,22 +163,6 @@ pub enum PowerStatus {
     Battery { percent: u8 },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TaskState {
-    Running,
-    Completed,
-    Interrupted,
-    Error,
-    Unknown,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct TaskReading {
-    pub state: TaskState,
-    pub title: Option<String>,
-}
-
 pub type WidgetValue = serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -96,6 +178,9 @@ pub struct Snapshot {
     applied_widgets: Vec<Widget>,
     values: BTreeMap<String, WidgetValue>,
     last_synced_at: Option<u64>,
+    last_readings_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    theme: Option<DisplayTheme>,
     power: PowerStatus,
 }
 
@@ -132,6 +217,8 @@ impl Device {
             applied_widgets,
             values: BTreeMap::new(),
             last_synced_at: None,
+            last_readings_at: None,
+            theme: None,
             power,
         };
 
@@ -230,6 +317,7 @@ impl Device {
             active_page_id: snapshot.active_page_id.clone(),
             rotation_seconds: snapshot.rotation_seconds,
             last_synced_at: snapshot.last_synced_at,
+            theme: snapshot.theme.clone(),
         };
         let write = || -> Result<(), Box<dyn std::error::Error>> {
             if let Some(parent) = path.parent() {
@@ -252,6 +340,7 @@ impl Device {
         };
         let saved: SavedPages = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
         self.validate_pages(&saved.pages, saved.rotation_seconds)?;
+        Self::validate_theme(saved.theme.as_ref())?;
         let active = saved
             .pages
             .iter()
@@ -263,14 +352,26 @@ impl Device {
         self.snapshot.pages = saved.pages;
         self.snapshot.rotation_seconds = saved.rotation_seconds;
         self.snapshot.last_synced_at = saved.last_synced_at;
+        self.snapshot.theme = saved.theme;
         self.snapshot.sequence += 1;
         Ok(())
     }
 
     pub fn apply_pages(
         &mut self,
+        pages: Vec<DisplayPage>,
+        rotation_seconds: u32,
+        base_revision: u64,
+        synced_at: u64,
+    ) -> Result<Snapshot, String> {
+        self.apply_display(pages, rotation_seconds, self.snapshot.theme.clone(), base_revision, synced_at)
+    }
+
+    pub fn apply_display(
+        &mut self,
         mut pages: Vec<DisplayPage>,
         rotation_seconds: u32,
+        theme: Option<DisplayTheme>,
         base_revision: u64,
         synced_at: u64,
     ) -> Result<Snapshot, String> {
@@ -278,11 +379,13 @@ impl Device {
             page.name = page.name.trim().into();
         }
         self.validate_pages(&pages, rotation_seconds)?;
+        Self::validate_theme(theme.as_ref())?;
         let applied_widgets = self.page_widgets(&pages);
         if self.snapshot.last_synced_at.is_some()
             && pages == self.snapshot.pages
             && rotation_seconds == self.snapshot.rotation_seconds
             && applied_widgets == self.snapshot.applied_widgets
+            && theme == self.snapshot.theme
         {
             return Ok(self.snapshot());
         }
@@ -298,6 +401,7 @@ impl Device {
         next.layout = active.layout.clone();
         next.pages = pages;
         next.rotation_seconds = rotation_seconds;
+        next.theme = theme;
         next.applied_widgets = applied_widgets;
         next.revision += 1;
         next.sequence += 1;
@@ -305,6 +409,19 @@ impl Device {
         self.persist(&next)?;
         self.snapshot = next;
         Ok(self.snapshot())
+    }
+
+    fn validate_theme(theme: Option<&DisplayTheme>) -> Result<(), String> {
+        if let Some(theme) = theme {
+            if !matches!(theme.active.as_str(), "dark" | "light")
+                || [&theme.dark, &theme.light].iter().any(|palette| {
+                    ![&palette.background, &palette.surface, &palette.text].iter().all(|color| is_hex_color(color))
+                })
+            {
+                return Err("屏幕主题或颜色无效。".into());
+            }
+        }
+        Ok(())
     }
 
     pub fn select_page(&mut self, id: &str) -> Result<Snapshot, String> {
@@ -343,6 +460,9 @@ impl Device {
             if !widget.sizes.contains(&[item.w, item.h]) {
                 return Err("组件尺寸不受支持。".into());
             }
+            if !item.appearance_fits(widget) {
+                return Err("组件外观无效。".into());
+            }
             let x = usize::from(item.x);
             let y = usize::from(item.y);
             let right = x + usize::from(item.w);
@@ -377,9 +497,11 @@ impl Device {
         for item in self.snapshot.pages.iter().flat_map(|page| &page.layout) {
             if !next
                 .iter()
-                .any(|widget| widget.id == item.id && widget.sizes.contains(&[item.w, item.h]))
+                .any(|widget| widget.id == item.id
+                    && widget.sizes.contains(&[item.w, item.h])
+                    && item.appearance_fits(widget))
             {
-                return Err("当前布局仍在使用此组件或规格，请先调整布局并同步。".into());
+                return Err("当前布局仍在使用此组件、规格或外观，请先调整布局并同步。".into());
             }
         }
         if self.snapshot.widgets != next {
@@ -421,6 +543,10 @@ impl Device {
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
         self.snapshot.sequence += 1;
+        self.snapshot.last_readings_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs());
         let mut frame = self.snapshot();
         for key in notifications {
             if let Some(reading) = frame.values.get_mut(&key) {

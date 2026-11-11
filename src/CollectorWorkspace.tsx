@@ -6,7 +6,7 @@ import { Input } from './components/ui/input'
 import { CollectorCode } from './CollectorCode'
 import { CollectorFiles, projectItems, samplePath } from './CollectorFiles'
 import { CollectorAuthorization, CollectorCodexSettings } from './CollectorAuthorization'
-import { createDraft, exportModule, focusLayout, getCatalog, getDraft, getGrantRequests, importModule, inspectImport, publishDraft, readDefinition, saveDraft, testDraft, type Approval, type Catalog, type Draft, type GrantRequest, type ImportReview, type TestResult } from './collectorApi'
+import { cancelCollectorAction, createDraft, exportModule, focusLayout, getCatalog, getDraft, getGrantRequests, importModule, inspectImport, publishDraft, readDefinition, runCollectorAction, saveDraft, testDraft, type Approval, type Catalog, type Draft, type GrantRequest, type ImportReview, type TestResult } from './collectorApi'
 import { WidgetReading } from './WidgetReading'
 import type { Reading, Widget } from './layout'
 import './collector.css'
@@ -70,6 +70,17 @@ export function CollectorWorkspace() {
     return () => { active = false; window.clearInterval(interval) }
   }, [])
 
+  async function dispatchAction(instanceId: string, action?: string) {
+    setError('')
+    try {
+      if (action) await runCollectorAction(instanceId, action)
+      else await cancelCollectorAction(instanceId)
+      setCatalog(await getCatalog())
+    } catch (reason) {
+      setError(String(reason))
+    }
+  }
+
   function editable(next: Draft) {
     testedApproval.current = undefined
     draftRef.current = next
@@ -78,7 +89,7 @@ export function CollectorWorkspace() {
   }
 
   function persist(next: Draft | undefined) {
-    if (!next || next === savedRef.current || next.id === 'codex' || next.id === 'system') return saveQueue.current
+    if (!next || next === savedRef.current || catalog?.modules.some(module => module.id === next.id && module.builtIn)) return saveQueue.current
     const pending = saveQueue.current.catch(() => {}).then(async () => {
       await saveDraft(next)
       savedRef.current = next
@@ -102,7 +113,7 @@ export function CollectorWorkspace() {
     let stop: (() => void) | undefined
     void window.onCloseRequested(async event => {
       const current = draftRef.current
-      if (!current || current === savedRef.current || current.id === 'codex' || current.id === 'system') return
+      if (!current || current === savedRef.current || catalog?.modules.some(module => module.id === current.id && module.builtIn)) return
       navigating.current = true
       try {
         await persist(current)
@@ -373,7 +384,7 @@ export function CollectorWorkspace() {
   const testLocation = jsError && draft?.files[jsError[1]] !== undefined
     ? { path: jsError[1], line: Number(jsError[2]) }
     : sampleError && hasSampleFile ? { path: samplePath, line: Number(sampleError[1]) } : undefined
-  const preview = resultDraft && test?.result && buildPreview(resultDraft, test.result.outputs)
+  const preview = resultDraft && test?.result && buildPreview(resultDraft, test.result)
 
   return <main className="studio collector-workspace" aria-label="数据采集器工作区">
     <div className="window-grip" data-tauri-drag-region aria-hidden="true" />
@@ -394,7 +405,7 @@ export function CollectorWorkspace() {
           return <Button autoHeight size="xs" variant="ghost" key={item.id} type="button" className="collector-module" data-active={!creating && item.id === draft?.id}
             onClick={() => void selectModule(item.id)} disabled={Boolean(busy)}>
             <Icon size={16} aria-hidden="true" />
-            <span><strong>{item.name}</strong><small>{item.builtIn ? '内置模块' : item.revision == null ? '未发布' : item.changed ? '已发布 · 有草稿' : '已发布'}</small></span>
+            <span><strong>{item.name}</strong><small>{item.builtIn ? '自带插件' : item.revision == null ? '未发布' : item.changed ? '已发布 · 有草稿' : '已发布'}</small></span>
             <ChevronRight size={13} aria-hidden="true" />
           </Button>
         })}
@@ -415,7 +426,7 @@ export function CollectorWorkspace() {
         {importing ? <div className="collector-start">
           <div className="collector-section-label">导入模块</div>
           <h2>{readDefinition(importing.draft.definition).name ?? '采集模块'}</h2>
-          <p>{importing.conflict ? '目录已有相同 ID 的模块。可以替换编辑中的草稿，或保留它并导入副本。' : 'Studio 会把项目打开为草稿。请确认脚本来自你自己或你信任的作者。'}</p>
+          <p>{importing.conflict ? '目录已有相同 ID 的模块。可以替换编辑中的草稿，或保留它并导入副本。' : '项目将作为草稿打开。请确认脚本来自你自己或你信任的作者。'}</p>
           <div className="collector-form-actions">
             <Button variant="ghost" size="sm" onClick={() => setImporting(undefined)} disabled={Boolean(busy)}>取消</Button>
             {importing.conflict && <Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={() => void acceptImport('update')}>作为更新导入</Button>}
@@ -423,7 +434,7 @@ export function CollectorWorkspace() {
           </div>
         </div> : creating ? <form className="collector-start" onSubmit={event => { event.preventDefault(); void create() }}>
           <h2>新建采集器</h2>
-          <p>选择一个模板，Studio 会建立可直接试跑的项目。</p>
+          <p>选择一个模板，创建可直接试跑的项目。</p>
           <div className="collector-templates">
             {templates.map(({ id, label, detail, icon: Icon }) => <Button autoHeight size="xs" variant="ghost" key={id} type="button" aria-pressed={id === template}
               onClick={() => setTemplate(id)}><Icon size={16} aria-hidden="true" /><span><strong>{label}</strong><small>{detail}</small></span>
@@ -438,12 +449,16 @@ export function CollectorWorkspace() {
           {catalog.status[module.id]?.error && <div className="collector-banner collector-error" role="status">{catalog.status[module.id].error}</div>}
           <div className="collector-workbar">
             <div><h2>{definition.name ?? module.name}</h2>
-              <span>{module.builtIn ? '内置 · 可试跑' : module.revision == null ? '本地草稿'
+              <span>{module.builtIn ? '自带 · 可试跑' : module.revision == null ? '本地草稿'
                 : '已发布 · 版本 ' + module.revision + (catalog.status[module.id]?.updatedAt && !catalog.status[module.id]?.error ? ' · 采集正常' : '')}</span></div>
             <div className="collector-actions">
               {!readOnly && module.revision != null && <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void saveExport()} title="导出发布版本"><Upload size={14} />导出</Button>}
               {module.canRestore && <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void publish(true)} title="恢复上一发布版本"><RotateCcw size={14} />恢复</Button>}
               {module.id === 'codex' && <Button size="sm" variant="ghost" onClick={() => setShowCodexSettings(true)}><Settings2 size={14} />连接设置</Button>}
+              {!readOnly && module.actionInstance && (module.activeAction
+                ? <Button size="sm" variant="ghost" onClick={() => void dispatchAction(module.actionInstance!)}>取消 {module.activeAction}</Button>
+                : module.actions.map(action => <Button key={action} size="sm" variant="ghost" disabled={Boolean(busy)}
+                  onClick={() => void dispatchAction(module.actionInstance!, action)}>{action}</Button>))}
               {!readOnly && module.revision != null && <Button size="sm" variant="ghost" title="返回屏幕布局" onClick={() => void focusLayout().catch(reason => setError(String(reason)))}><ArrowRight size={14} />布局</Button>}
               <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => void runTest()}>
                 <CirclePlay size={15} />{busy === 'test' ? '运行中…' : '测试运行'}
@@ -488,7 +503,7 @@ export function CollectorWorkspace() {
                 <CollectorCode draft={editorDraft ?? draft} file={file} value={activeText ?? ''} readOnly={readOnly || Boolean(busy)} jumpLine={jumpLine} onChange={editContent} />
                 <div className="collector-editor-status">
                   <span>{file}</span>
-                  <span>{readOnly ? '内置 · 只读' : saveError ? '保存失败' : draft === savedRef.current ? '已保存' : '自动保存'}</span>
+                  <span>{readOnly ? '自带 · 只读' : saveError ? '保存失败' : draft === savedRef.current ? '已保存' : '自动保存'}</span>
                 </div>
               </div>
               <section className="collector-results" aria-label="试跑结果">
@@ -536,16 +551,19 @@ export function CollectorWorkspace() {
   </main>
 }
 
-function buildPreview(draft: Draft, outputs: NonNullable<TestResult['result']>['outputs']) {
+function buildPreview(draft: Draft, { outputs, notifications }: NonNullable<TestResult['result']>) {
   const definition = readDefinition(draft.definition)
   return Object.entries(definition.widgets ?? {}).map(([key, spec]) => {
-    const output = outputs[spec.outputKey]
+    const { outputKey, label, shortLabel, supportedSpans, ...render } = spec
+    const output = outputs[outputKey]
     const widget: Widget = {
-      id: key, group: draft.id, name: spec.label, shortName: spec.shortLabel ?? spec.label,
-      unit: definition.outputs?.[spec.outputKey]?.unit ?? '', sizes: [[1, 1]], kind: spec.kind,
-      stateLabels: spec.stateLabels, accentColor: spec.accentColor,
+      ...render,
+      id: key, group: draft.id, name: label, shortName: shortLabel ?? label,
+      unit: definition.outputs?.[outputKey]?.unit ?? '', sizes: supportedSpans.map(({ w, h }) => [w, h]),
     }
-    let reading: Reading | undefined = output ? { ...output, kind: spec.kind } : undefined
+    let reading: Reading | undefined = output
+      ? { ...output, kind: spec.kind, notify: spec.supportsNotify && notifications.includes(outputKey) }
+      : undefined
     if (reading && spec.kind === 'chart' && spec.chart) reading = {
       ...reading,
       values: [...Array<null>(spec.chart.sampleCount - 1).fill(null), reading.value ?? null],

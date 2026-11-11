@@ -78,7 +78,7 @@ pub async fn open_desktop_widget(app: AppHandle) -> Result<(), String> {
         .preferences
         .always_on_top;
     WebviewWindowBuilder::new(&app, WINDOW_LABEL, WebviewUrl::default())
-        .title("TDisplay · 桌面控件")
+        .title("Mado · 桌面控件")
         .inner_size(f64::from(width), f64::from(height))
         .decorations(false)
         .shadow(false)

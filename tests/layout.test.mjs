@@ -23,13 +23,12 @@ test('scans for a free cell when adding a card', () => {
   assert.deepEqual(firstOpenCell([quota, speed], 'resets'), { ...resets, x: 1, y: 0 })
 })
 
-test('every component only supports one grid cell', () => {
-  for (const { id } of display.widgets) {
-    assert.equal(canPlace([], { id, x: display.columns - 1, y: display.rows - 1, w: 1, h: 1 }), true, id)
-    for (const [w, h] of [[1, 2], [2, 1], [2, 2]]) {
-      assert.equal(canPlace([], { id, x: 0, y: 0, w, h }), false, `${id} ${w} × ${h}`)
-    }
-  }
+test('resizes only to declared spans that fit the anchored card', () => {
+  assert.equal(canPlace([quota], { ...quota, w: 2, h: 2 }), true)
+  assert.equal(canPlace([quota, speed], { ...quota, w: 4 }), false)
+  assert.equal(canPlace([quota], { ...quota, x: 1, w: 4 }), false)
+  assert.equal(canPlace([], { ...quota, w: 1, h: 2 }), false)
+  assert.equal(canPlace([], { ...quota, id: 'system.cpu-usage-history', w: 2, h: 2 }), false)
 })
 
 test('the initial layout uses valid one-cell placements', () => {

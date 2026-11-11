@@ -1,10 +1,19 @@
-import { defineModule } from '@tdisplay/sdk'
+import { defineModule } from '@mado/sdk'
+import { localReadings } from './rollouts.mjs'
 
 const metric = value => value == null ? null : { value }
 
 const unsigned = value => Number.isSafeInteger(value) && value >= 0 ? value : null
 
-export async function readAccount(_, context) {
+async function initialize(context) {
+  await context.process.request('appServer', 'initialize', {
+    clientInfo: { name: 'tdisplay-collector', version: '1.0.0' },
+  })
+  await context.process.notify('appServer', 'initialized')
+}
+
+export async function readAccount(context, initialized = false) {
+  if (!initialized) await initialize(context)
   const { account } = await context.process.request('appServer', 'account/read', { refreshToken: false })
   if (account == null) return { login: 'missing' }
   if (account.type !== 'chatgpt') return { login: 'unsupported' }
@@ -27,47 +36,67 @@ export async function readAccount(_, context) {
   }
 }
 
-export default defineModule({
-  async collect(settings, context) {
-    const account = settings.mode === 'account' ? await readAccount(settings, context) : null
-    const { windows = [], resetCount } = account?.limits ?? settings.limits ?? {}
-    const { speed, task } = settings
-    const limitingWindow = windows.reduce((lowest, window) =>
-      lowest == null || window.remainingPercent < lowest.remainingPercent ? window : lowest, null)
-    const quota = limitingWindow?.remainingPercent
-    const resetSeconds = limitingWindow?.resetsAt
-    return {
-      outputs: {
-        quota: quota == null ? null : { value: quota, ratio: quota / 100 },
-        speed: metric(speed),
-        resets: metric(resetCount),
-        quotaReset: resetSeconds == null ? null : { deadlineUnixMs: resetSeconds * 1000 },
-        task: task == null ? null : { state: task.state, detail: task.title },
-      },
-    }
-  },
-})
-
-export function summarizeRollouts({ samples, turns, nowMicros }) {
-  const order = (a, b) => b.endedMs - a.endedMs || b.durationMs - a.durationMs || b.tokens - a.tokens
-  const unique = samples.sort(order)
-    .filter((sample, i) => i === 0 || order(sample, samples[i - 1]) !== 0)
-    .slice(0, 10)
-  const totalTokens = unique.reduce((sum, sample) => sum + sample.tokens, 0)
-  const totalMs = unique.reduce((sum, sample) => sum + sample.durationMs, 0)
-  const speed = unique.length === 0 ? null : {
-    tokensPerSecond: Math.round(totalTokens / (totalMs / 1000)),
-    samples: unique.length,
-    latestAt: Math.trunc(unique[0].endedMs / 1000),
+function outputs(limits, speed, task) {
+  const { windows = [], resetCount } = limits ?? {}
+  const window = windows.reduce((lowest, entry) =>
+    lowest == null || entry.remainingPercent < lowest.remainingPercent ? entry : lowest, null)
+  return {
+    quota: window ? { value: window.remainingPercent, ratio: window.remainingPercent / 100 } : null,
+    speed: metric(speed?.tokensPerSecond),
+    resets: metric(resetCount),
+    quotaReset: window?.resetsAt == null ? null : { deadlineUnixMs: window.resetsAt * 1000 },
+    task: task ? { state: task.state, detail: task.title } : null,
   }
-
-  const candidates = turns.map(({ id, state, modified, started }) => {
-    const running = state === 'running' && nowMicros - modified <= 180_000_000
-    return { id, running, time: running ? started ?? modified : modified,
-      state: state === 'running' && !running ? 'unknown' : state }
-  })
-  candidates.sort((a, b) => Number(b.running) - Number(a.running) || b.time - a.time ||
-    (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
-  const task = candidates[0]
-  return { speed, task: task ? { id: task.id, state: task.state } : null }
 }
+
+async function collect(_, context, initialized = false) {
+  const previous = context.state ?? {}
+  const now = context.sampledAtUnixMs
+  let account = previous.account
+  let checkedAt = previous.checkedAt
+  if (account == null || !Number.isFinite(checkedAt) || now < checkedAt || now - checkedAt >= 120_000) {
+    checkedAt = now
+    try {
+      account = await readAccount(context, initialized)
+    } catch (error) {
+      account = { login: 'error', message: String(error.message ?? error) }
+    }
+  }
+  const { speed, task, logs } = await localReadings(context, previous.logs)
+  const phase = { chatgpt: 'connected', missing: 'needsLogin', unsupported: 'unsupportedLogin' }[account.login] ?? 'error'
+  const notify = task && previous.task?.id === task.id && previous.task.state === 'running'
+    && ['completed', 'interrupted', 'error'].includes(task.state)
+  return {
+    outputs: outputs(account.limits, speed, task),
+    notifications: notify ? ['task'] : [],
+    state: { account, checkedAt, logs, task: task ? { id: task.id, state: task.state } : null },
+    status: {
+      phase,
+      message: account.message ?? null,
+      plan: account.plan ?? null,
+      limits: account.limits ?? { windows: [], resetCount: null },
+      accountUpdatedAt: phase === 'connected' ? Math.floor(checkedAt / 1000) : null,
+      speed,
+    },
+  }
+}
+
+async function login(_, context) {
+  await initialize(context)
+  const { loginId, authUrl } = await context.process.request('appServer', 'account/login/start', {
+    type: 'chatgpt',
+  })
+  if (typeof loginId !== 'string' || typeof authUrl !== 'string') {
+    throw new Error('Codex 未返回完整的登录会话。')
+  }
+  await context.interaction.openUrl('loginBrowser', authUrl)
+  for (let attempt = 0; attempt < 175; attempt++) {
+    const event = await context.process.receive('appServer', 'account/login/completed')
+    if (event?.loginId !== loginId) continue
+    if (event.success !== true) throw new Error('浏览器登录未完成，请重试。')
+    return collect({}, { ...context, state: null }, true)
+  }
+  throw new Error('等待浏览器登录超时。')
+}
+
+export default defineModule({ collect, handlers: { login } })

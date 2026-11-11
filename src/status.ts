@@ -13,10 +13,10 @@ export function formatSyncTime(seconds?: number | null) {
   return `${year}:${day} ${time}`
 }
 
-export function formatCountdown(deadline: number | undefined, now: number) {
-  if (deadline === undefined) return '—'
+export function formatCountdown(deadline: number | undefined, now: number, expiredText = '待刷新') {
+  if (deadline === undefined || !Number.isFinite(deadline)) return '—'
   const seconds = Math.ceil(deadline - now)
-  if (seconds <= 0) return '待刷新'
+  if (seconds <= 0) return expiredText
   if (seconds >= 86400) return `${Math.floor(seconds / 86400)}d${Math.floor(seconds / 3600) % 24}h`
   if (seconds >= 3600) return `${Math.floor(seconds / 3600)}h${twoDigits(Math.floor(seconds / 60) % 60)}m`
   if (seconds >= 60) return `${Math.floor(seconds / 60)}m`

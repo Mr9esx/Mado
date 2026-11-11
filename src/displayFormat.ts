@@ -22,3 +22,17 @@ export function normalizedRatio(value: number, min = 0, max = 1) {
   return Number.isFinite(value) && Number.isFinite(min) && Number.isFinite(max) && max > min
     ? Math.min(1, Math.max(0, (value - min) / (max - min))) : 0
 }
+
+export function digitRollColumns(from: string, to: string, direction: 1 | -1) {
+  const source = from.padStart(to.length, ' ').slice(-to.length)
+  return [...to].map((last, index) => {
+    const first = source[index]
+    if (!/^[0-9]$/.test(first) || !/^[0-9]$/.test(last) || first === last) return [last]
+    const digits = [first]
+    for (let digit = Number(first); digit !== Number(last);) {
+      digit = (digit + direction + 10) % 10
+      digits.push(String(digit))
+    }
+    return digits
+  })
+}

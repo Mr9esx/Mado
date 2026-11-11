@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TDisplay 设备屏原型</title>
+<title>Mado 设备屏原型</title>
 <style>
   @font-face {
     font-family: Maple;
-    src: url("../src/assets/MapleMono-NF-CN-Regular.woff2") format("woff2");
+    src: url("../src/assets/MapleMono-CN-Regular.woff2") format("woff2");
     font-display: swap;
   }
   * { box-sizing: border-box; }
@@ -68,6 +68,7 @@
     overflow: hidden; background: var(--screen); color: var(--ink); font: 12px/1 Maple, monospace;
   }
   .device[data-theme="light"] { --screen: #e3e3e3; --surface: #fafafa; --ink: #242424; }
+  .device[data-rotated="true"] { transform: rotate(180deg); }
   .device-grid { display: grid; grid-template-columns: repeat(4, 75px); grid-template-rows: repeat(2, 64px); gap: 4px; }
   .tile {
     --alert-mix: 0%; --ink-mix: 0%;
@@ -82,7 +83,8 @@
   }
   .tile[data-type="progress"] .tile-bar { background: color-mix(in srgb, var(--ink) 28%, var(--surface)); }
   .tile-bar > i { display: block; width: var(--progress); height: 4px; background: var(--state); }
-  .tile .label { position: absolute; inset: 12px 8px auto; font-size: 12px; line-height: 14px; }
+  .tile .label { position: absolute; inset: 12px 5px auto 8px; font-size: 14px; line-height: 16px; letter-spacing: 0; }
+  .tile .label .label-han { letter-spacing: -2px; margin-inline-end: 2px; }
   .tile .reading {
     position: absolute; inset: 36px 8px auto; display: flex; align-items: baseline; gap: 2px;
     width: calc(100% - 16px); white-space: nowrap; font-size: 20px; line-height: 20px; font-weight: 700;
@@ -95,19 +97,18 @@
   .metric-value.is-four-char { font-size: 17px; }
   .metric-unit {
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-    flex: none; max-width: 18px; overflow: hidden; white-space: normal; overflow-wrap: anywhere;
-    font-size: 10px; line-height: 10px;
+    flex: none; max-width: 22px; overflow: hidden; white-space: normal; overflow-wrap: anywhere;
+    font-size: 11px; line-height: 11px;
   }
   .tile[data-rows="2"]:is([data-type="metric"], [data-type="progress"]) .reading { font-size: 32px; line-height: 32px; }
   .tile[data-rows="2"]:not(:has(.details)) .reading { top: 75px; transform: translateY(-50%); }
   .tile .details { position: absolute; inset: 84px 8px auto; font-size: 12px; line-height: 16px; }
-  .tile[data-type="chart"] { --state: var(--ink); }
   .value-tag {
     padding: 1px 3px; border-radius: 2px;
     background: var(--ink); color: var(--screen); font-size: 8px; line-height: 9px; font-weight: 700;
   }
   .chart-value-tag {
-    position: absolute; inset: 30px auto auto 8px; z-index: 1;
+    position: absolute; inset: 30px auto auto 8px; z-index: 1; background: var(--state); line-height: 8px;
   }
   .chart-bars { position: absolute; inset: auto 8px 8px; width: calc(100% - 16px); }
   .chart-bars rect { fill: var(--state); }
@@ -115,7 +116,8 @@
   .trend-delta[data-direction="up"] { background: #48b34a; color: #1e1e1e; }
   .trend-delta[data-direction="down"] { background: #d63f41; color: #fff; }
   .tile[data-rows="2"] .metric-reading { top: 35px; bottom: auto; }
-  .tile[data-type="range"] .metric-reading { top: 28px; bottom: auto; }
+  .tile[data-type="range"]:not([data-rows="2"]) .label { top: 10px; }
+  .tile[data-type="range"]:not([data-rows="2"]) .metric-reading { top: 30px; bottom: auto; }
   .range-gauge { position: absolute; inset: auto 8px 8px; height: 6px; }
   .range-gauge .rail { position: absolute; inset: 3px 0 auto; height: 1px; background: var(--ink); opacity: .55; }
   .range-gauge .tick { position: absolute; top: 1px; width: 1px; height: 4px; background: var(--ink); }
@@ -132,19 +134,36 @@
   }
   .line.holding { mask-image: linear-gradient(to right, #000, #000 calc(100% - var(--edge-fade)), transparent); }
   .status-bar {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 6px;
     padding: 0 8px; background: var(--surface); font-size: 12px; line-height: 12px;
   }
-  .status-page-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .status-page-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .status-page-dots { display: flex; flex: none; flex-direction: column; gap: 1px; }
   .status-page-dot { width: 2px; height: 2px; border-radius: 50%; background: var(--ink); opacity: .35; }
   .status-page-dot.is-current { opacity: 1; }
-  .status-page { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 12px; }
-  .status-info { display: grid; font-size: 6px; line-height: 6px; white-space: nowrap; }
+  .status-page { max-width: 86px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 12px; }
+  .status-time { flex: 1 0 auto; font-size: 11px; line-height: 12px; white-space: nowrap; }
   .status-right { margin-inline-start: auto; }
   .status-right, .power { display: flex; align-items: center; gap: 4px; flex: none; }
   .status-bar svg { display: block; }
+  .settings-screen { position: relative; background: var(--surface); padding: 8px; }
+  .settings-screen h3 { font: 20px/22px Maple, monospace; margin: 0; }
+  .settings-menu, .settings-info { position: absolute; inset: 38px 8px auto; display: grid; gap: 4px; }
+  .settings-menu { top: 36px; }
+  .settings-row { display: flex; align-items: center; justify-content: space-between; height: 20px; padding-inline: 8px; font-size: 14px; background: var(--screen); }
+  .settings-row.is-selected { background: var(--ink); color: var(--screen); }
+  .settings-row span + span { font-size: 13px; }
+  .settings-info { gap: 0; }
+  .settings-info div { height: 20px; display: flex; justify-content: space-between; padding-right: 8px; font: 13px/16px Maple, monospace; }
+  .settings-percent { position: absolute; top: 39px; right: 16px; font-size: 32px; line-height: 34px; font-weight: 700; }
+  .settings-gauge { position: absolute; inset: 81px 8px auto; height: 6px; background: color-mix(in srgb, var(--ink) 28%, var(--surface)); }
+  .settings-gauge i { display: block; height: 6px; background: var(--ink); }
+  .settings-scale { position: absolute; inset: 93px 16px auto 8px; display: flex; justify-content: space-between; font-size: 11px; line-height: 14px; }
+  .settings-key-hints { display: grid; align-content: center; text-align: center; background: var(--surface); font-size: 11px; line-height: 12px; white-space: pre; }
+  .settings-demo-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
   .message { background: var(--surface); display: grid; place-items: center; font-size: 20px; line-height: 20px; }
+  .startup-screen { grid-row: 1 / -1; display: grid; place-items: center; }
+  .startup-screen img { display: block; width: 64px; height: 64px; }
   .message.failure { grid-template-rows: 20px minmax(0, 1fr); place-items: stretch; gap: 4px; padding: 8px; }
   .message-title { display: flex; align-items: center; gap: 5px; }
   .message-title svg { color: #d63f41; flex: none; }
@@ -172,22 +191,23 @@
 </style>
 </head>
 <body>
-<!-- IconPark @icon-park/svg 1.4.2, Apache-2.0. Adapted to symbols and optically adjusted for device size; battery fill is added locally. See iconpark-license.txt. -->
+<!-- BEGIN 由 firmware/tools/build_icons.py 生成。来源与许可证见 docs/iconpark-license.txt。 -->
 <svg class="glyphs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <symbol id="ip-wifi" viewBox="0 0 48 48"><path d="M4 18.9653C4.5888 18.4073 5.19522 17.8786 5.8174 17.3792C17.0371 8.37423 33.3821 8.90292 44 18.9653M38 25.799C30.268 18.067 17.732 18.067 10 25.799M32 32.3137C27.5817 27.8954 20.4183 27.8954 16 32.3137" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="24" cy="37.5" r="2.5" fill="currentColor"/></symbol>
+  <symbol id="ip-wifi" viewBox="0 0 48 48"><path d="M4 18.9653C4.5888 18.4073 5.19522 17.8786 5.8174 17.3792C17.0371 8.37423 33.3821 8.90292 44 18.9653M38 25.799C30.268 18.067 17.732 18.067 10 25.799M32 32.3137C27.5817 27.8954 20.4183 27.8954 16 32.3137" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="24" cy="37.5" r="3.5" fill="currentColor"/></symbol>
   <symbol id="ip-bluetooth" viewBox="0 0 48 48"><path d="M12 13L34 34L23 44V4L34 14L12 35" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="ip-usb" viewBox="0 0 48 48"><g stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="4"/><circle cx="36" cy="24" r="4"/><path d="M19 9L24 4L29 9M25 39L12 28.2632V22M36 28V32.7895L24 41M24 4V43M21 44H27"/></g></symbol>
-  <symbol id="ip-link-break" viewBox="0 0 48 48"><path d="M32 15H42C43.1046 15 44 15.8954 44 17V31C44 32.1046 43.1046 33 42 33H32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 15H6C4.89543 15 4 15.8954 4 17V31C4 32.1046 4.89543 33 6 33H17" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 6V42" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 24H16" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M32 24H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="ip-usb" viewBox="0 0 48 48"><g transform="translate(-1.714286 0)" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="4"/><circle cx="36" cy="24" r="4"/><path d="M19 9L24 4L29 9M25 39L12 28.2632V22M36 28V32.7895L24 41M24 4V43M21 44H27"/></g></symbol>
+  <symbol id="ip-link-break" viewBox="0 0 48 48"><path d="M32 15H42C43.1046 15 44 15.8954 44 17V31C44 32.1046 43.1046 33 42 33H32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 15H6C4.89543 15 4 15.8954 4 17V31C4 32.1046 4.89543 33 6 33H17" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M22.285714 6V42" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 24H16" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M32 24H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="ip-loading-four" viewBox="0 0 48 48"><path d="M4 24C4 35.0457 12.9543 44 24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="ip-attention" viewBox="0 0 48 48"><path d="M24 44C29.5228 44 34.5228 41.7614 38.1421 38.1421C41.7614 34.5228 44 29.5228 44 24C44 18.4772 41.7614 13.4772 38.1421 9.85786C34.5228 6.23858 29.5228 4 24 4C18.4772 4 13.4772 6.23858 9.85786 9.85786C6.23858 13.4772 4 18.4772 4 24C4 29.5228 6.23858 34.5228 9.85786 38.1421C13.4772 41.7614 18.4772 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path fill-rule="evenodd" clip-rule="evenodd" d="M24 37C25.3807 37 26.5 35.8807 26.5 34.5C26.5 33.1193 25.3807 32 24 32C22.6193 32 21.5 33.1193 21.5 34.5C21.5 35.8807 22.6193 37 24 37Z" fill="currentColor"/><path d="M24 12V28" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="ip-plug-one" viewBox="0 0 48 48"><g transform="translate(24 24) scale(.9) translate(-22 -24)"><rect x="12" y="12" width="24" height="24" rx="3" fill="none" stroke="currentColor" stroke-width="3.5"/><path d="M24 36V41C24 42.6569 22.6569 44 21 44H8" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 12V4" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M28 12V4" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 24H26" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g></symbol>
-  <symbol id="ip-battery-empty" viewBox="0 0 48 48"><g transform="translate(-1 0)"><path d="M38 14H6C4.89543 14 4 14.8954 4 16V32C4 33.1046 4.89543 34 6 34H38C39.1046 34 40 33.1046 40 32V16C40 14.8954 39.1046 14 38 14Z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M42 20H44C45.1046 20 46 20.8954 46 22V26C46 27.1046 45.1046 28 44 28H42V20Z" fill="currentColor"/><rect x="8" y="19" height="10" fill="currentColor" style="width:var(--charge,0px)"/></g></symbol>
-  <symbol id="ip-battery-charge" viewBox="0 0 48 48"><g transform="translate(-1 0)"><path d="M13 14H6C4.89543 14 4 14.8954 4 16V32C4 33.1046 4.89543 34 6 34H13" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M31 34H38C39.1046 34 40 33.1046 40 32V16C40 14.8954 39.1046 14 38 14H31" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M22.002 14L17 24.0012H27.004L22 34" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M42 20H44C45.1046 20 46 20.8954 46 22V26C46 27.1046 45.1046 28 44 28H42V20Z" fill="currentColor"/></g></symbol>
+  <symbol id="ip-plug-one" viewBox="0 0 48 48"><g transform="translate(24 24) scale(.9) translate(-22 -24)"><rect x="12" y="12" width="24" height="24" rx="3" fill="none" stroke="currentColor" stroke-width="4.5"/><path d="M24 36V41C24 42.6569 22.6569 44 21 44H8" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 12V4" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M28 12V4" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 24H26" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/></g></symbol>
+  <symbol id="ip-battery-empty" viewBox="0 0 48 48"><g transform="translate(-1 0)"><path d="M38 14H6C4.89543 14 4 14.8954 4 16V32C4 33.1046 4.89543 34 6 34H38C39.1046 34 40 33.1046 40 32V16C40 14.8954 39.1046 14 38 14Z" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M42 20H44C45.1046 20 46 20.8954 46 22V26C46 27.1046 45.1046 28 44 28H42V20Z" fill="currentColor"/></g><rect x="7" y="19" height="10" fill="currentColor" style="width:var(--charge,0px)"/></symbol>
+  <symbol id="ip-battery-charge" viewBox="0 0 48 48"><g transform="translate(-1 0)"><path d="M13 14H6C4.89543 14 4 14.8954 4 16V32C4 33.1046 4.89543 34 6 34H13" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M31 34H38C39.1046 34 40 33.1046 40 32V16C40 14.8954 39.1046 14 38 14H31" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M22.002 14L17 24.0012H27.004L22 34" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M42 20H44C45.1046 20 46 20.8954 46 22V26C46 27.1046 45.1046 28 44 28H42V20Z" fill="currentColor"/></g></symbol>
   <symbol id="ip-play" viewBox="0 0 48 48"><path d="M24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M20 24V17.0718L26 20.5359L32 24L26 27.4641L20 30.9282V24Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></symbol>
   <symbol id="ip-check-one" viewBox="0 0 48 48"><path d="M24 44C29.5228 44 34.5228 41.7614 38.1421 38.1421C41.7614 34.5228 44 29.5228 44 24C44 18.4772 41.7614 13.4772 38.1421 9.85786C34.5228 6.23858 29.5228 4 24 4C18.4772 4 13.4772 6.23858 9.85786 9.85786C6.23858 13.4772 4 18.4772 4 24C4 29.5228 6.23858 34.5228 9.85786 38.1421C13.4772 41.7614 18.4772 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 24L22 30L34 18" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="ip-forbid" viewBox="0 0 48 48"><path fill-rule="evenodd" clip-rule="evenodd" d="M24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 15L33 33" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="ip-help" viewBox="0 0 48 48"><path d="M24 44C29.5228 44 34.5228 41.7614 38.1421 38.1421C41.7614 34.5228 44 29.5228 44 24C44 18.4772 41.7614 13.4772 38.1421 9.85786C34.5228 6.23858 29.5228 4 24 4C18.4772 4 13.4772 6.23858 9.85786 9.85786C6.23858 13.4772 4 18.4772 4 24C4 29.5228 6.23858 34.5228 9.85786 38.1421C13.4772 41.7614 18.4772 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M24 28.6248V24.6248C27.3137 24.6248 30 21.9385 30 18.6248C30 15.3111 27.3137 12.6248 24 12.6248C20.6863 12.6248 18 15.3111 18 18.6248" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path fill-rule="evenodd" clip-rule="evenodd" d="M24 37.6248C25.3807 37.6248 26.5 36.5055 26.5 35.1248C26.5 33.7441 25.3807 32.6248 24 32.6248C22.6193 32.6248 21.5 33.7441 21.5 35.1248C21.5 36.5055 22.6193 37.6248 24 37.6248Z" fill="currentColor"/></symbol>
 </svg>
+<!-- END device-icons -->
 
 <main>
   <header class="intro">
@@ -200,7 +220,7 @@
       <h2>屏幕外观</h2>
       <div class="fields">
         <label>主题<select name="theme"><option value="dark">深色</option><option value="light">明亮</option></select></label>
-        <label>设备状态<select name="scene"><option value="online">正常显示</option><option value="waiting">等待连接</option><option value="unsynced">等待同步</option><option value="failure">连接失败</option><option value="offline">断线保留画面</option></select></label>
+        <label>设备状态<select name="scene"><option value="online">正常显示</option><option value="startup">准备本机资源</option><option value="waiting">等待连接</option><option value="unsynced">等待同步</option><option value="failure">连接失败</option><option value="offline">断线保留画面</option></select></label>
         <label class="wide">连接方式<select name="connectionMethod"><option value="wifi">Wi-Fi</option><option value="bluetooth">蓝牙</option><option value="usb">USB</option></select></label>
         <div class="colors wide">
           <label>屏幕背景<input name="screen" type="color" value="#1e1e1e"></label>
@@ -247,6 +267,19 @@
       <p class="eyebrow">行 × 列 · 1:1</p>
     </header>
     <div class="frames" id="span-frames"></div>
+  </section>
+
+  <section class="board" id="device-settings">
+    <header class="board-heading">
+      <h2>实体按键与设备设置</h2>
+      <p class="eyebrow">320 × 170 · 1:1</p>
+    </header>
+    <div id="settings-preview"></div>
+    <div class="settings-demo-actions" aria-label="模拟板载按键">
+      <button type="button" data-settings-key="user">用户键</button>
+      <button type="button" data-settings-key="boot">短按 BOOT</button>
+      <button type="button" data-settings-key="hold">长按 BOOT</button>
+    </div>
   </section>
 
   <section class="board" id="storyboard">
@@ -299,7 +332,7 @@
     speed: { id: 'speed', type: 'metric', label: '输出速度', value: 248, unit: 'tok/s', color: '#397adc' },
     resets: { type: 'metric', label: '重置卡', value: 0, unit: '张' },
     recovery: { type: 'metric', label: '额度恢复', value: '5d4h' },
-    cpu: { type: 'chart', label: 'CPU 占用', unit: '%', rangeSeconds: 3600, sampleCount: 12, min: 0, max: 100,
+    cpu: { type: 'chart', label: 'CPU占用', unit: '%', rangeSeconds: 3600, sampleCount: 12, min: 0, max: 100,
       points: [18, 26, 22, 42, 35, 61, 48, 73, 54, 88, 67, 79].map((value, index) => ({ timestamp: 1794200000000 + index * 300000, value })) },
     trend: { type: 'trend', label: 'CPU 趋势', value: 68, unit: '%', delta: 4, direction: 'up' },
     range: { type: 'range', label: 'CPU 区间', value: 68, unit: '%', min: 0, max: 100 },
@@ -332,7 +365,6 @@
   const failureReason = '连接超时，请检查电脑端服务是否运行，并确认数据线与设备连接正常后再重试。';
   fields.failureReason.value = failureReason;
   const lastSync = '17:29:30';
-  const firmwareVersion = 'v0.1.0';
   let currentState = 'running';
   let alertAnimation = 0;
   let reasonAnimation = 0;
@@ -402,6 +434,12 @@
       html + '</span></span></div>';
   }
 
+  const hanRuns = /([\u3007\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u{20000}-\u{2FA1F}\u{30000}-\u{3347F}]+)/u;
+  function labelMarkup(text) {
+    return text.split(hanRuns).map((run, index) => index % 2
+      ? '<span class="label-han">' + escapeText(run) + '</span>' : escapeText(run)).join('');
+  }
+
   function readingMarkup({ value, unit, unitStyle }) {
     if (value == null) return '—';
     const valueText = escapeText(value);
@@ -456,8 +494,8 @@
 
   function tile(card, w = 1, h = 1, position = '') {
     if (!card) return '<div class="tile" style="' + position + '" aria-hidden="true"></div>';
-    const { type, label, color = '#f1f1f1', ratio = 0, details = [], alertInk, alertMix = 0, inkMix = 0 } = card;
-    const styles = type === 'chart' ? [] : ['--state:' + color];
+    const { type, label, color = 'var(--ink)', ratio = 0, details = [], alertInk, alertMix = 0, inkMix = 0 } = card;
+    const styles = ['--state:' + color];
     if (position) styles.push(position);
     if (type === 'progress') styles.push('--progress:' + Math.round((79 * w - 4) * ratio) + 'px');
     if (alertInk) styles.push('--alert-ink:' + alertInk, '--alert-mix:' + alertMix + '%', '--ink-mix:' + inkMix + '%');
@@ -475,15 +513,16 @@
       }).join('');
       const latest = card.points[card.points.length - 1];
       return '<div class="tile" data-type="chart" style="' + styles.join(';') + '"><div class="tile-bar"></div>' +
-        line('label', escapeText(label)) + '<span class="value-tag chart-value-tag">' + escapeText(latest.value + card.unit) + '</span>' +
-        '<svg class="chart-bars" height="' + chartHeight + '" viewBox="0 0 59 ' + chartHeight + '" preserveAspectRatio="none" role="img" aria-label="' +
-        escapeText(label + '，' + card.points.length + '个采样点') + '">' + bars + '</svg></div>';
+        line('label', labelMarkup(label)) +
+        '<svg class="chart-bars" height="' + chartHeight + '" viewBox="0 0 ' + (card.sampleCount * 5 - 1) + ' ' + chartHeight + '" preserveAspectRatio="none" role="img" aria-label="' +
+        escapeText(label + '，' + card.points.length + '个采样点') + '">' + bars + '</svg>' +
+        '<span class="value-tag chart-value-tag">' + escapeText(latest.value + card.unit) + '</span></div>';
     }
     if (type === 'range') {
       const span = Math.max(1, card.max - card.min);
       const positionPercent = Math.max(0, Math.min(100, ((card.value - card.min) / span) * 100));
       return '<div class="tile" data-type="range" style="' + styles.join(';') + '"><div class="tile-bar"></div>' +
-        line('label', escapeText(label)) + metricMarkup(card) +
+        line('label', labelMarkup(label)) + metricMarkup(card) +
         '<div class="range-gauge" style="--position:' + positionPercent + '%" role="img" aria-label="范围 ' +
         escapeText(card.min + card.unit + ' 到 ' + card.max + card.unit) + '"><i class="rail"></i>' +
         '<i class="tick" style="left:0"></i><i class="tick" style="left:50%"></i><i class="tick" style="left:100%"></i>' +
@@ -494,14 +533,14 @@
       ? '<div class="details">' + details.slice(0, 2).map((detail) => line('detail', escapeText(detail))).join('') + '</div>'
       : '';
     return '<div class="tile" data-widget="' + escapeText(card.id || '') + '" data-type="' + type + '" data-rows="' + h + '" style="' + styles.join(';') + '">' +
-      bar + line('label', escapeText(label)) + (['metric', 'progress', 'trend'].includes(type) ? metricMarkup(card) : line('reading', readingMarkup(card))) + supplemental + '</div>';
+      bar + line('label', labelMarkup(label)) + (['metric', 'progress', 'trend'].includes(type) ? metricMarkup(card) : line('reading', readingMarkup(card))) + supplemental + '</div>';
   }
 
   function taskCard(state, title, elapsed = 0) {
     const settings = stateSettings[state];
     return {
       type: 'state', label: tasks[state].label, value: title, color: settings.color,
-      details: ['来源 Codex', '项目 TDisplay'], alertInk: alertTextColor(settings), ...alertFrame(elapsed),
+      details: ['来源 Codex', '项目 Mado'], alertInk: alertTextColor(settings), ...alertFrame(elapsed),
     };
   }
 
@@ -527,8 +566,7 @@
     return '<div class="status-bar"><span class="status-page-group">' +
       '<span class="status-page-dots" role="img" aria-label="当前第 ' + (pageIndex + 1) + ' 页，预览 ' + maxPages + ' 个圆点">' + dots + '</span>' +
       '<span class="value-tag status-page">' + escapeText(pages[pageId].name) + '</span></span>' +
-      '<span class="status-info"><span class="status-time">Updated at ' + (showTime ? lastSync : '—') + '</span>' +
-      '<span>FW ' + firmwareVersion + '</span></span><span class="status-right">' +
+      '<span class="status-time">Updated at ' + (showTime ? lastSync : '—') + '</span><span class="status-right">' +
       icon(connection.icon, 14, connectionLabel) +
       '<span class="power">' + powerStatus(power) + '</span></span></div>';
   }
@@ -549,6 +587,10 @@
 
   function screen(theme, scene, power, synced, title, state, reason = failureReason, layout = 'compact',
     { pageId = 'codex', connectionMethod = 'wifi' } = {}) {
+    if (scene === 'startup') {
+      return '<div class="device" data-theme="' + theme + '" aria-label="320 × 170 设备屏">' +
+        '<div class="startup-screen"><img src="../public/brand/logo-' + theme + '.svg" alt="Mado"></div></div>';
+    }
     const page = pages[pageId];
     const body = scene === 'failure'
       ? '<div class="message failure"><div class="message-title">' + icon('attention', 16, '失败') +
@@ -559,6 +601,62 @@
     return '<div class="device" data-theme="' + theme + '" aria-label="320 × 170 设备屏">' +
       body + status(pageId, scene, power, synced, connectionMethod) + '</div>';
   }
+
+  const settingsPreview = document.getElementById('settings-preview');
+  const settingsItems = ['屏幕亮度', '屏幕反转', '设备信息', '返回仪表盘'];
+  let settingsView = 'menu', settingsFocus = 0, savedBrightness = 70, draftBrightness = 70;
+  let screenRotated = false;
+
+  function renderSettings() {
+    const theme = fields.theme.value;
+    if (settingsView === 'dashboard') {
+      settingsPreview.innerHTML = screen(theme, 'online', '100', true, getTitle(), currentState);
+      measureMarquees(settingsPreview, 'holding');
+    } else {
+      let body, hints;
+      if (settingsView === 'menu') {
+        body = '<h3>设备设置</h3><div class="settings-menu">' + settingsItems.map((name, index) =>
+          '<div class="settings-row' + (index === settingsFocus ? ' is-selected' : '') + '"><span>' + name + '</span><span>' +
+          [savedBrightness + '%', screenRotated ? '开启' : '关闭', '&gt;', ''][index] + '</span></div>').join('') + '</div>';
+        hints = '用户键 选择    BOOT 确认\n长按 BOOT 退出';
+      } else if (settingsView === 'brightness') {
+        body = '<h3>屏幕亮度</h3><strong class="settings-percent">' + draftBrightness + '%</strong>' +
+          '<div class="settings-gauge"><i style="width:' + draftBrightness + '%"></i></div>' +
+          '<div class="settings-scale"><span>10%</span><span>100%</span></div>';
+        hints = '用户键 -10%    BOOT +10%\n长按 BOOT 保存返回';
+      } else {
+        body = '<h3>设备信息</h3><div class="settings-info">' +
+          [['型号', 'T-Display-C5 V1.0'], ['固件', 'v0.1.0'], ['连接', 'USB 已连接'], ['电池', '100%']]
+            .map(([label, value]) => '<div><span>' + label + '</span><span>' + value + '</span></div>').join('') + '</div>';
+        hints = 'BOOT 返回';
+      }
+      settingsPreview.innerHTML = '<div class="device" data-theme="' + theme + '"><div class="settings-screen">' +
+        body + '</div><div class="settings-key-hints">' + hints + '</div></div>';
+    }
+    const device = settingsPreview.firstElementChild;
+    device.dataset.rotated = screenRotated;
+    Object.entries(themeColors[theme]).forEach(([name, value]) => device.style.setProperty('--' + name, value));
+  }
+
+  document.getElementById('device-settings').addEventListener('click', (event) => {
+    const key = event.target.dataset.settingsKey;
+    if (!key) return;
+    if (settingsView === 'dashboard') {
+      if (key === 'hold') { settingsView = 'menu'; settingsFocus = 0; }
+    } else if (settingsView === 'menu') {
+      if (key === 'user') settingsFocus = (settingsFocus + 1) % settingsItems.length;
+      else if (key === 'hold' || settingsFocus === 3) settingsView = 'dashboard';
+      else if (settingsFocus === 2) settingsView = 'about';
+      else if (settingsFocus === 1) screenRotated = !screenRotated;
+      else { settingsView = 'brightness'; draftBrightness = savedBrightness; }
+    } else if (settingsView === 'brightness') {
+      if (key === 'hold') { savedBrightness = draftBrightness; settingsView = 'menu'; }
+      else draftBrightness = Math.max(10, Math.min(100, draftBrightness + (key === 'boot' ? 10 : -10)));
+    } else if (key !== 'user') {
+      settingsView = 'menu';
+    }
+    renderSettings();
+  });
 
   function measureMarquees(root, still = false) {
     root.querySelectorAll('.line').forEach((line) => {
@@ -584,7 +682,7 @@
       const travel = distance + 18;
       const animation = track.animate(
         [{ transform: 'translateX(0)' }, { transform: 'translateX(-' + travel + 'px)' }],
-        { delay: 800, duration: travel * 1000 / 32, iterations: Infinity },
+        { delay: 800, duration: travel * 1000 / (line.classList.contains('label') ? 16 : 32), iterations: Infinity },
       );
       setTimeout(() => {
         if (animation.playState === 'running') line.classList.remove('holding');
@@ -653,7 +751,7 @@
     const tile = preview.querySelector('[data-type="state"]');
     if (!tile) return;
     const state = stateSettings[currentState];
-    tile.querySelector('.label .line-content').textContent = tasks[currentState].label;
+    tile.querySelector('.label .line-content').innerHTML = labelMarkup(tasks[currentState].label);
     tile.style.setProperty('--state', state.color);
     tile.style.setProperty('--alert-ink', alertTextColor(state));
   }
@@ -662,6 +760,8 @@
     const theme = fields.theme.value;
     const device = preview.firstElementChild;
     device.dataset.theme = theme;
+    const logo = device.querySelector('.startup-screen img');
+    if (logo) logo.src = '../public/brand/logo-' + theme + '.svg';
     Object.entries(themeColors[theme]).forEach(([name, value]) => device.style.setProperty('--' + name, value));
   }
 
@@ -699,9 +799,11 @@
     const name = event.target.name;
     if (name === 'theme') {
       loadThemeFields();
+      renderSettings();
     } else if (name in themeColors[fields.theme.value]) {
       themeColors[fields.theme.value][name] = event.target.value;
       styleTheme();
+      renderSettings();
     } else if (['page', 'scene', 'connectionMethod', 'power', 'sync', 'failureReason', 'layout'].includes(name)) {
       renderPreview();
     } else if (name === 'taskState') {
@@ -794,6 +896,7 @@
   ).join('');
 
   renderPreview();
+  renderSettings();
   document.fonts.ready.then(() => {
     measureMarquees(preview);
     scrollFailureReason();

@@ -15,3 +15,10 @@ test('distinguishes missing or invalid readings from a real zero', () => {
   for (const input of [undefined, null, NaN, Infinity, -Infinity]) assert.equal(formatMetric(input), '—')
   assert.equal(formatMetric(0), '0')
 })
+
+test('digit rolling right aligns place values and leaves matching positions still', async () => {
+  const { digitRollColumns } = await import('../src/displayFormat.ts')
+  assert.deepEqual(digitRollColumns('109', '110', 1), [['1'], ['0', '1'], ['9', '0']])
+  assert.deepEqual(digitRollColumns('100', '99', -1), [['0', '9'], ['0', '9']])
+  assert.deepEqual(digitRollColumns('1.2', '1.4', 1), [['1'], ['.'], ['2', '3', '4']])
+})

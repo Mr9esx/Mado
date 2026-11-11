@@ -5,8 +5,10 @@ mod codex;
 mod collector;
 mod desktop_widget;
 mod device;
+mod display_wire;
+mod usb_display;
 
-use device::{Device, DisplayPage, LayoutItem, PowerStatus, Snapshot};
+use device::{Device, DisplayPage, DisplayTheme, LayoutItem, PowerStatus};
 use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -16,10 +18,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const SNAPSHOT_EVENT: &str = "device-snapshot";
 
 #[tauri::command]
-fn get_snapshot(device: State<'_, Mutex<Device>>) -> Result<Snapshot, String> {
+fn get_snapshot(device: State<'_, Mutex<Device>>) -> Result<serde_json::Value, String> {
     device
         .lock()
-        .map(|device| device.snapshot())
+        .map(|device| display_wire::local_snapshot(&device.snapshot()))
         .map_err(|error| error.to_string())
 }
 
@@ -29,7 +31,7 @@ fn sync_layout(
     device: State<'_, Mutex<Device>>,
     layout: Vec<LayoutItem>,
     base_revision: u64,
-) -> Result<Snapshot, String> {
+) -> Result<serde_json::Value, String> {
     let synced_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
@@ -38,6 +40,7 @@ fn sync_layout(
         .lock()
         .map_err(|error| error.to_string())?
         .apply_layout(layout, base_revision, synced_at)?;
+    let snapshot = display_wire::local_snapshot(&snapshot);
     let _ = app.emit(SNAPSHOT_EVENT, &snapshot);
     Ok(snapshot)
 }
@@ -48,16 +51,21 @@ fn apply_pages(
     device: State<'_, Mutex<Device>>,
     pages: Vec<DisplayPage>,
     rotation_seconds: u32,
+    theme: Option<DisplayTheme>,
     base_revision: u64,
-) -> Result<Snapshot, String> {
+) -> Result<serde_json::Value, String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_secs();
-    let snapshot = device
-        .lock()
-        .map_err(|error| error.to_string())?
-        .apply_pages(pages, rotation_seconds, base_revision, now)?;
+    let mut device = device.lock().map_err(|error| error.to_string())?;
+    let snapshot = if let Some(theme) = theme {
+        device.apply_display(pages, rotation_seconds, Some(theme), base_revision, now)?
+    } else {
+        device.apply_pages(pages, rotation_seconds, base_revision, now)?
+    };
+    drop(device);
+    let snapshot = display_wire::local_snapshot(&snapshot);
     let _ = app.emit(SNAPSHOT_EVENT, &snapshot);
     Ok(snapshot)
 }
@@ -67,16 +75,24 @@ fn select_page(
     app: AppHandle,
     device: State<'_, Mutex<Device>>,
     id: String,
-) -> Result<Snapshot, String> {
+) -> Result<serde_json::Value, String> {
     let snapshot = device
         .lock()
         .map_err(|error| error.to_string())?
         .select_page(&id)?;
+    let snapshot = display_wire::local_snapshot(&snapshot);
     let _ = app.emit(SNAPSHOT_EVENT, &snapshot);
     Ok(snapshot)
 }
 
 fn main() {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--collect")) {
+        if let Err(error) = collector::workspace::run_cli(std::env::args().skip(2)) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if std::env::args_os()
         .nth(1)
         .is_some_and(|argument| argument == collector::runner::RUNNER_FLAG)
@@ -97,6 +113,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Mutex::new(Device::new(power)))
+        .manage(usb_display::UsbDisplay::default())
         .setup(|app| {
             appearance::start(app.handle())?;
             desktop_widget::start(app.handle())?;
@@ -110,14 +127,20 @@ fn main() {
             {
                 eprintln!("无法恢复页面：{error}");
             }
-            app.manage(codex::start(app.handle().clone())?);
-            collector::builtin::start_system(app.handle().clone());
+            codex::restore_settings(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             appearance::get_appearance,
             appearance::update_appearance,
             get_snapshot,
+            usb_display::list_usb_displays,
+            usb_display::get_usb_display_status,
+            usb_display::connect_usb_display,
+            usb_display::disconnect_usb_display,
+            usb_display::select_usb_display_page,
+            usb_display::set_usb_display_brightness,
+            usb_display::set_usb_display_rotation,
             sync_layout,
             apply_pages,
             select_page,
@@ -135,6 +158,8 @@ fn main() {
             collector::workspace::choose_json_input,
             collector::workspace::publish_collector,
             collector::workspace::collector_grants,
+            collector::workspace::run_collector_action,
+            collector::workspace::cancel_collector_action,
             collector::workspace::transfer::inspect_collector_import,
             collector::workspace::transfer::import_collector,
             collector::workspace::transfer::export_collector,
@@ -146,7 +171,7 @@ fn main() {
             codex::cancel_codex_login
         ])
         .build(tauri::generate_context!())
-        .expect("TDisplay Studio failed to start")
+        .expect("Mado Studio failed to start")
         .run(|app, event| match event {
             tauri::RunEvent::Exit => collector::process::terminate_active(),
             #[cfg(target_os = "macos")]

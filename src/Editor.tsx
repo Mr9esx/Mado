@@ -1,15 +1,19 @@
-import { Check, ChevronDown, CircleAlert, Monitor, Plus, RefreshCw, Settings2, Terminal } from 'lucide-react'
+import { Check, ChevronDown, CircleAlert, Monitor, Plus, RefreshCw, Settings2, Terminal, Usb } from 'lucide-react'
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { openDesktopWidget, applyPages, useDevice } from './device'
-import { canPlace, cellAt, cellHeight, cellWidth, display, firstOpenCell, sameLayout, widgetCatalog, type DisplayPage, type LayoutItem, type Widget } from './layout'
-import { PageManager } from './PageManager'
+import { canPlace, cardWidget, cellAt, cellHeight, cellWidth, defaultDisplayTheme, display, firstOpenCell, sameLayout, widgetCatalog, type DisplayPage, type DisplayTheme, type LayoutItem, type Widget } from './layout'
+import { PageManager, PagePlayback } from './PageManager'
 import { pageError, pagesFromSnapshot, samePages } from './pages'
 import { Screen } from './Screen'
 import { WidgetReading } from './WidgetReading'
 import { codexLabel, useCodexStatus } from './codex'
 import { AppSettings } from './AppSettings'
+import { CardSettings } from './CardSettings'
+import { useAppearance } from './appearance'
 import { openCollectors } from './collectorApi'
+import { useUsbDevice } from './usbDevice'
+import { UsbSettings } from './UsbSettings'
 
 type Drag = {
   pointer: number
@@ -33,10 +37,16 @@ const arrowOffsets: Record<string, [number, number]> = {
 
 export function Editor() {
   const { snapshot, receive } = useDevice()
+  const usb = useUsbDevice()
+  const { appearance } = useAppearance()
   const { status: codexStatus, error: sourceError } = useCodexStatus()
   const [showSettings, setShowSettings] = useState<'appearance' | 'source' | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set<string>())
-  const [draft, setDraft] = useState<{ pages: DisplayPage[]; rotationSeconds: number; baseRevision: number } | null>(null)
+  const [draft, setDraft] = useState<{ pages: DisplayPage[]; rotationSeconds: number; theme: DisplayTheme; baseRevision: number } | null>(null)
+  const [pageManagerKey, setPageManagerKey] = useState(0)
+  const [showCardSettings, setShowCardSettings] = useState(false)
+  const [showUsb, setShowUsb] = useState(false)
+  const [pushInterval, setPushInterval] = useState(1000)
   const [selectedPageId, setSelectedPageId] = useState('')
   const [selectedId, select] = useState('')
   const [target, setTarget] = useState<{ item: LayoutItem; valid: boolean }>()
@@ -50,8 +60,13 @@ export function Editor() {
   const pages = draft?.pages ?? pagesFromSnapshot(snapshot)
   const currentPage = pages.find(page => page.id === selectedPageId) ?? pages[0]
   const rotationSeconds = draft?.rotationSeconds ?? snapshot?.rotationSeconds ?? 0
+  const savedTheme = snapshot?.theme ?? { ...defaultDisplayTheme, active: appearance.displayTheme }
+  const theme = draft?.theme ?? savedTheme
+  const palette = theme[theme.active]
   const layout = currentPage.layout
   const catalog = widgetCatalog(snapshot)
+  const selectedItem = layout.find(item => item.id === selectedId)
+  const selectedWidget = selectedItem && catalog.get(selectedItem.id)
   const groups = new Map<string, Widget[]>()
   for (const widget of catalog.values()) {
     const group = groups.get(widget.group)
@@ -62,11 +77,12 @@ export function Editor() {
   const resolved = [...new Set(pages.flatMap(page => page.layout.map(item => item.id)))].flatMap(id => catalog.get(id) ?? [])
   const dirty = snapshot ? snapshot.lastSyncedAt == null || !samePages(pages, pagesFromSnapshot(snapshot))
     || rotationSeconds !== (snapshot.rotationSeconds ?? 0)
+    || JSON.stringify(theme) !== JSON.stringify(savedTheme)
     || (snapshot.appliedWidgets !== undefined && JSON.stringify(resolved) !== JSON.stringify(snapshot.appliedWidgets)) : false
   const validationError = pageError(pages)
-  function editPages(next: DisplayPage[], selection?: string, rotation = rotationSeconds) {
+  function editPages(next: DisplayPage[], selection?: string, rotation = rotationSeconds, nextTheme = theme) {
     if (syncing || !snapshot) return
-    setDraft({ pages: next, rotationSeconds: rotation, baseRevision: draft?.baseRevision ?? snapshot.revision })
+    setDraft({ pages: next, rotationSeconds: rotation, theme: nextTheme, baseRevision: draft?.baseRevision ?? snapshot.revision })
     if (selection) { setSelectedPageId(selection); select('') }
     setSyncError('')
   }
@@ -177,13 +193,19 @@ export function Editor() {
     setSyncing(true)
     setSyncError('')
     try {
-      receive(await applyPages(pages, rotationSeconds, draft?.baseRevision ?? snapshot.revision))
-      setDraft(null)
+      receive(await applyPages(pages, rotationSeconds, draft?.baseRevision ?? snapshot.revision, theme))
+      clearDraft()
     } catch (reason) {
       setSyncError(`应用布局失败。${String(reason)}`)
     } finally {
       setSyncing(false)
     }
+  }
+
+  function clearDraft() {
+    setDraft(null)
+    setPageManagerKey(key => key + 1)
+    setSyncError('')
   }
 
   async function showDisplay() {
@@ -198,19 +220,25 @@ export function Editor() {
   return (
     <main className="studio studio-editor" aria-label="布局编辑器" onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={clearDrag} onLostPointerCapture={clearDrag}
       onKeyDown={(event) => {
-        if (!showSettings && event.key === 'Escape') {
+        if (!showSettings && !showCardSettings && !showUsb && event.key === 'Escape') {
           clearDrag()
           select('')
         }
       }}>
       <header className="studio-titlebar">
         <div className="window-grip" data-tauri-drag-region aria-hidden="true" />
-        <div className="studio-tools" role="group" aria-label="Studio 工具">
+        <div className="studio-tools" role="group" aria-label="工具栏">
           <Button size="sm" variant="ghost" title={collectorError || undefined} onClick={() => {
             setCollectorError('')
             void openCollectors().catch(reason => setCollectorError(String(reason)))
           }}>
             {collectorError ? <CircleAlert size={15} /> : <Terminal size={15} />}采集器
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => {
+            setShowUsb(true)
+            void usb.refreshPorts().catch(() => {})
+          }}>
+            <Usb size={15} />{usb.connection?.phase === 'connected' ? 'USB 已连接' : 'USB 设备'}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setShowSettings('appearance')}>
             <Settings2 size={15} />设置
@@ -250,7 +278,7 @@ export function Editor() {
                       const placed = layout.find((item) => item.id === definition.id)
                       const [defaultWidth, defaultHeight] = definition.sizes[0]
                       const item = placed ?? { id: definition.id, x: 0, y: 0, w: defaultWidth, h: defaultHeight }
-                      const size = `${item.w} × ${item.h}`
+                      const size = `${item.h} × ${item.w}`
                       return (
                         <Button size="sm" variant="outline"
                           key={definition.id}
@@ -264,8 +292,10 @@ export function Editor() {
                         >
                           <span className="library-thumbnail" aria-hidden="true">
                             <span className="library-thumbnail-viewport" style={thumbnailViewport}>
-                              <span className="screen-widget is-narrow library-thumbnail-card" style={thumbnailCard}>
-                                <WidgetReading widget={definition} width={1} value={snapshot?.values[definition.id]} />
+                              <span className="screen-widget is-narrow library-thumbnail-card" style={{
+                                ...thumbnailCard, '--display-screen': palette.background, '--display-surface': palette.surface, '--display-ink': palette.text,
+                              } as CSSProperties}>
+                                <WidgetReading widget={cardWidget(definition, placed?.appearance)} width={1} value={snapshot?.values[definition.id]} />
                               </span>
                             </span>
                           </span>
@@ -287,33 +317,45 @@ export function Editor() {
         <section className="display-console" aria-label="屏幕预览">
           <div className="screen-meta">
             <h2>预览</h2>
-            <span className="usage">{occupied} / {display.columns * display.rows} 格</span>
+            <PagePlayback seconds={rotationSeconds} disabled={syncing || !snapshot}
+              onChange={seconds => editPages(pages, undefined, seconds)} />
           </div>
-          <PageManager pages={pages} selected={currentPage.id} rotationSeconds={rotationSeconds} disabled={syncing || !snapshot}
-            onSelect={id => { setSelectedPageId(id); select(''); clearDrag() }} onChange={editPages}
-            onRotationChange={seconds => editPages(pages, undefined, seconds)} />
+          <PageManager key={pageManagerKey} pages={pages} selected={currentPage.id} disabled={syncing || !snapshot}
+            onSelect={id => { setSelectedPageId(id); select(''); clearDrag() }} onChange={editPages} />
           <div className="preview-panel">
             <div className="screen-stage">
-              <Screen surface="desktop" pages={pages} pageId={currentPage.id} layout={layout} snapshot={snapshot} gridRef={grid}
-                selected={selectedId} dragging={draggingId} target={target}
-                onSelect={select} onRemove={removeCard} onCardPointerDown={beginDrag} onCardKeyDown={editWithKeys} />
+              <div>
+                <Screen surface="desktop" pages={pages} pageId={currentPage.id} layout={layout} snapshot={snapshot} palette={theme} gridRef={grid}
+                  selected={selectedId} dragging={draggingId} target={target}
+                  onSelect={select} onRemove={removeCard} onCardPointerDown={beginDrag} onCardKeyDown={editWithKeys} />
+                <span className="usage preview-usage">{occupied} / {display.columns * display.rows} 格</span>
+              </div>
             </div>
             <div className="display-toolbar">
               <Button size="sm" variant="ghost" className="action-button"
                 title={displayError || undefined} onClick={showDisplay}>
                 <DisplayIcon size={16} />桌面控件
               </Button>
+              {draft && <Button size="sm" variant="dim" type="button" disabled={syncing}
+                title="恢复到上次应用的布局" onClick={clearDraft}>放弃更改</Button>}
               <Button size="sm" className="action-button sync-button" disabled={!snapshot || !dirty || syncing || !!validationError}
-                title={syncError || '保存全部页面并应用到桌面控件'} onClick={synchronize}>
+                title={syncError || '保存全部页面并同步到显示端'} onClick={synchronize}>
                 <SyncIcon size={14} className={syncing ? 'spinning' : ''} />{syncing ? '应用中' : '应用布局'}
               </Button>
             </div>
           </div>
           {(syncError || validationError) && <p className="page-error" role="alert">{syncError || validationError}</p>}
-          {draft && <Button size="sm" variant="ghost" className="discard-pages" type="button" disabled={syncing} onClick={() => { setDraft(null); setSyncError('') }}>放弃未应用的修改</Button>}
+          <Button size="sm" variant="outline" className="card-settings-button" disabled={!selectedWidget || syncing || !snapshot}
+            title="选择卡片后设置颜色和样式"
+            onClick={() => setShowCardSettings(true)}><Settings2 size={15} />组件设置{selectedWidget ? ` · ${selectedWidget.name}` : ''}</Button>
         </section>
       </div>
-      {showSettings && <AppSettings initialTab={showSettings} status={codexStatus} error={sourceError} onDismiss={() => setShowSettings(null)} />}
+      {showSettings && <AppSettings initialTab={showSettings} status={codexStatus} error={sourceError} onDismiss={() => setShowSettings(null)}
+        device={{ usb, interval: pushInterval, onIntervalChange: setPushInterval }}
+        screenTheme={snapshot ? { value: theme, onChange: next => editPages(pages, undefined, rotationSeconds, next) } : undefined} />}
+      {showCardSettings && selectedItem && selectedWidget && <CardSettings key={selectedWidget.id} item={selectedItem}
+        widget={selectedWidget} theme={theme} fits={item => canPlace(layout, item, catalog)} onChange={place} onDismiss={() => setShowCardSettings(false)} />}
+      {showUsb && <UsbSettings usb={usb} interval={pushInterval} onDismiss={() => setShowUsb(false)} />}
     </main>
   )
 }

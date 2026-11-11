@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TDisplay Studio",
+  "productName": "Mado Studio",
   "version": "0.1.0",
   "identifier": "dev.tdisplay.studio",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "TDisplay Studio",
+        "title": "Mado Studio",
         "width": 780,
         "height": 560,
         "resizable": false,
@@ -33,7 +33,12 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.png"
+      "icons/icon.png",
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ],
     "resources": [
       "licenses/reui.txt",

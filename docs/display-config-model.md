@@ -1,8 +1,10 @@
-# TDisplay 屏幕配置数据模型
+# Mado 屏幕配置数据模型
 
-本稿定义 TDisplay Studio 的采集模块 SDK、屏幕配置和设备协议。采集模块声明可输出的数据，组件定义声明怎么展示，卡片绑定已发布采集器的输出。Studio 把采样转换为按 `cardId` 索引的读数，发给桌面控件和实体屏。新建采集器使用 SDK v2，已有 SDK v1 模块继续运行。
+本稿维护采集模块 SDK、输出契约、屏幕配置和卡片读数字段。[总体设计](design.md)是统一入口；消息外层、完整事件列表、适配器、确认重试及事件时序以[统一显示协议](display-protocol.md)为准。采集模块声明可输出的数据，组件定义声明怎么展示，卡片绑定已发布采集器的输出；Studio 解析成按 `cardId` 索引的读数，通过同一协议投递给本机与实体屏。新建采集器使用 SDK v2，已有 SDK v1 模块继续运行。
 
-桌面控件是独立于硬件的本机输出：读取同一份已应用布局和采集数据，不等待设备连接或设备确认。App 中「应用布局」更新本机布局；下文涉及实体设备确认、传输、供电和固件的字段仍属于硬件协议。桌面控件状态栏使用 App 版本与本机标识。当前本机快照以 `pages: {id, name, layout}[]`、`activePageId` 和 `rotationSeconds` 表示多页，`layout` 为当前页的兼容字段；应用操作校验并持久化全部页面，翻页仅更新当前页和帧序号，不增加配置版本。轮播默认关闭，可选 5/10/15/30/60 秒。相同组件允许放入不同页，单页仍不可重复；全部页面参与采集器引用保护。已应用配置保存在应用配置目录的 `display-pages.json`，读取数值不落盘。
+目标协议中，桌面控件是独立显示目标，使用本地适配器，不等待实体设备连接或确认。页面配置整体提交；读数每帧覆盖所有页面的所有卡片；当前页不决定采集和发送范围。桌面状态栏显示本机和 App 版本，不伪造设备供电信息。
+
+当前实现仍使用 Tauri `Snapshot`：`pages: {id, name, layout}[]`、`activePageId`、`rotationSeconds`，`layout` 是当前页兼容字段，读数按组件 ID 存储。该快照保留编辑器元数据；其 `displayFrame` 字段携带与 USB 同源的显示配置和全页读数。现有应用操作校验并持久化全部页面，翻页不增加配置版本。轮播默认关闭，可选 5/10/15/30/60 秒。同组件允许跨页放置、单页不重复；全部页面参与采集器引用保护。配置保存在 `display-pages.json`，实时读数不落盘。
 
 ## 数据分层
 
@@ -39,7 +41,7 @@
 | `schedule` | 作者 | 新项目使用 `{ refreshSeconds, enabled }`。采集间隔为 5–3600 秒，设 `enabled: false` 后发布可暂停采集。 |
 | `outputs` | 作者 | 以 `outputKey` 为索引，至少声明一路。每路声明 `valueType`，按需声明单位、状态键和辅助字段。 |
 | `widgets` | 作者 | 以模块内组件键为索引。`widgetKey` 由小写字母、数字和连字符组成。一个输出可供多个组件定义引用。Studio 用 `${moduleId}.${widgetKey}` 生成全局 `widgetId`。 |
-| `moduleId` | Studio | 新建时生成 UUID。改名、编辑和发布新版均沿用原 ID。随包内置模块和外部工具编写的模块可以使用预先分配的 ID，支持用点分隔命名空间。 |
+| `moduleId` | Studio | 新建时生成 UUID。改名、编辑和发布新版均沿用原 ID。随包自带插件和外部工具编写的模块可以使用预先分配的 ID，支持用点分隔命名空间。 |
 | `sdkApiVersion` | Studio | 新建时随模板写入 `2`，用于选择清单、脚本入口和返回值契约。编辑和发布沿用原值。导入按完整清单的版本校验，缺少版本或版本超出支持范围时给出错误。 |
 | `entry` | Studio | 模板默认指向 `src/index.mjs`。用户可在文件树里选择其他项目内的 JavaScript ESM 文件作为入口。Studio 保存相对路径，重命名时同步更新。 |
 
@@ -47,7 +49,7 @@ Studio 在新建时为草稿保留 ID，并在注册或发布时原子检查唯�
 
 - ID 未使用时，沿用该 ID 创建草稿。
 - ID 已存在且与现有草稿或已发布版本内容一致时，提示已有相同内容，并打开对应版本。
-- ID 已存在但内容不同时，可以导入为更新草稿，或者「作为副本导入」，由 Studio 分配新 ID。若已有编辑中的草稿，先提示处理该草稿。更新在测试和发布后才会生效，沿用原 SDK 版本。要使用不同 SDK 版本，请作为副本导入。内置模块的保留 ID 禁止通过导入更新。
+- ID 已存在但内容不同时，可以导入为更新草稿，或者「作为副本导入」，由 Studio 分配新 ID。若已有编辑中的草稿，先提示处理该草稿。更新在测试和发布后才会生效，沿用原 SDK 版本。要使用不同 SDK 版本，请作为副本导入。自带插件的保留 ID 禁止通过导入更新。
 
 SDK v1 的 `inputs` 保留兼容。Studio 按已有绑定或本次授权预读取 `httpJson` 或 `fileJson`，再把 JSON 传给旧脚本的 `collect(inputs, context)`。
 
@@ -70,7 +72,7 @@ SDK v1 的 `inputs` 保留兼容。Studio 按已有绑定或本次授权预读�
 
 | API | 行为 |
 | --- | --- |
-| `defineModule({ …, collect })` | 从 `@tdisplay/sdk` 导入，作为入口脚本的默认导出。名称、参数、授权、输出和采集函数在同一个对象中定义。 |
+| `defineModule({ …, collect })` | 从 `@mado/sdk` 导入，作为入口脚本的默认导出。名称、参数、授权、输出和采集函数在同一个对象中定义。 |
 | `collect(settings, context)` | 每次试跑或正式采集时调用。脚本自行发起 I/O，返回 `{ outputs, notifications? }` 或相应的 Promise。 |
 | `context.sampledAtUnixMs` | Studio 为本次采集分配的时间戳。该批输出使用同一时间戳。 |
 | `context.log(message)` | 写入本次执行的有限长度调试日志。日志只显示在 Studio。 |
@@ -80,7 +82,7 @@ SDK v1 的 `inputs` 保留兼容。Studio 按已有绑定或本次授权预读�
 `notifications` 是本次请求提醒的状态输出键列表。每个键必须对应本批非空的 `state` 输出。提醒请求独立于可缓存的样本，Studio 只将它投递到本次更新中绑定该输出且允许提醒的卡片。下面的例子假设模块已声明 `task` 为状态输出，并把 `completed` 列入 `stateKeys`。
 
 ```js
-import { defineModule } from '@tdisplay/sdk'
+import { defineModule } from '@mado/sdk'
 
 export default defineModule({
   collect() {
@@ -100,13 +102,13 @@ export default defineModule({
 2. 在文件树中新建、删除或重命名项目文件。Studio 自动保存草稿。重命名入口时更新 `entry`，删除入口前先选择替代文件。缺失的导入会在检查或试跑时定位到引用处，修复后才可发布。
 3. 点「测试运行」。在试跑区的「样例数据」中可以按需填写离线响应，也可以用实际资源试跑。项目内显式创建的 `fixtures/sample.json` 优先用于离线试跑。测试结果包含日志、错误位置、读数和卡片预览，写入预览数据。测试使用和正式采集相同的运行器及 SDK 校验。
 4. 点「发布」。Studio 校验测试结果对应当前文件快照，保存新的 `moduleRevision`，将该版本注册到模块目录。有新增或变化的资源时会先确认授权。发布成功后采集器自动注册，用户可以直接在布局中选择其卡片。
-5. 可以导入或导出模块目录。目录包含清单、入口和项目内依赖。导入时先校验清单和文件结构，再以草稿打开。导出包含入口脚本和实际项目文件，Studio 生成模块清单。试跑面板中的样例、授权与本机选择的路径留在本机。打开旧项目时，Studio 创建引用原脚本的新入口，保留原有文件及屏幕绑定。内置模块从同一套清单注册。
+5. 可以导入或导出模块目录。目录包含清单、入口和项目内依赖。导入时先校验清单和文件结构，再以草稿打开。导出包含入口脚本和实际项目文件，Studio 生成模块清单。试跑面板中的样例、授权与本机选择的路径留在本机。打开旧项目时，Studio 创建引用原脚本的新入口，保留原有文件及屏幕绑定。自带插件同样从清单和 MJS 入口装配，目录中的保留 ID 和发布管理仍有专门处理。
 
-QuickJS 在 Studio 随包提供的独立运行器内执行。模块加载器解析项目快照中的相对导入和 `@tdisplay/sdk`。兼容的纯 JS 库可以作为项目文件一起导入。运行器禁用原生模块、系统模块和任意文件加载，限制时间、内存和输出。支持执行陌生来源的模块之前，为运行器增加操作系统级沙箱。
+Studio 的自带和用户插件都由同一个实例调度器启动，在独立 QuickJS 子进程中执行。模块加载器解析项目快照中的相对导入和 `@mado/sdk`。已发布插件中的 `@tdisplay/sdk` 仍可加载同一 SDK。兼容的纯 JS 库可以作为项目文件一起导入。运行器禁用原生模块、系统模块和任意文件加载，限制时间、内存和输出。支持执行陌生来源的模块之前，为运行器增加操作系统级沙箱。
 
 ## 由脚本发起采集
 
-脚本可以分页、组合多个数据源，或根据上一次响应决定下一次请求。Studio 校验每次 I/O 调用。所有 I/O 方法均返回 Promise。
+脚本可以分页、组合多个数据源，或根据上一次响应决定下一次请求。运行器按清单和实例授权校验每次 I/O 调用。所有 I/O 方法均返回 Promise。
 
 | `permissions[alias].kind` | 调用 | 规则 |
 | --- | --- | --- |
@@ -114,14 +116,18 @@ QuickJS 在 Studio 随包提供的独立运行器内执行。模块加载器解�
 | `http` | `context.http.getJson(alias, path?)` → JSON | GET 的简写，非 2xx 响应或无效 JSON 会抛出异常。 |
 | `file` / `directory` | `context.files.readText(alias, path?)` → UTF-8 文本 | 文件授权下省略路径。目录授权下传相对文件路径，宿主将读取限制在授权目录内。 |
 | `directory` | `context.files.list(alias, path?)` → `{ name, kind }[]` | 枚举授权目录或相对的子目录。 |
+| `directory` | `context.files.find(alias, { path, prefix, suffix, depth, modifiedSince, limit })` → `{ path, modified, size }[]` | 在授权目录内按名称、深度和修改时间查找普通文件。结果按修改时间降序，时间使用 Unix 毫秒。 |
+| `directory` | `context.files.readWindow(alias, path, { headBytes?, tailBytes? })` → `{ head, tail }` | 有界读取首行和末尾文本，跳过截断的首行。适用于日志文件。 |
 | `process` | `context.process.run(alias, args?)` → `{ code, stdout, stderr }` | 用户选择可执行文件。清单的 `args` 为可选用的完整参数组合，例如 `[["--summary"], ["--details"]]`。每次调用必须精确匹配一组。 |
-| `stdio` | `context.process.request(alias, method, params?)`、`context.process.notify(alias, method, params?)` | 用户选择可执行文件，清单声明固定的启动 `args` 和允许的 `methods`。同一次采集复用一个逐行 JSON-RPC 会话，采集结束即关闭。 |
-| `system` | `context.system.read(alias)` → `{ cpuPercent, memoryPercent, uptimeSeconds }` | 用户确认授权读取本机指标。 |
+| `stdio` | `context.process.request(alias, method, params?)`、`context.process.notify(alias, method, params?)` | 用户选择可执行文件，清单声明固定的启动 `args` 和允许的 `methods`。同一次采集复用一个逐行 JSON-RPC 会话，采集结束即关闭。可选 `versionless` 省略协议版本字段，`environment` 将环境变量绑定到已授权资源别名。 |
+| `stdio` | `context.process.receive(alias, method, timeoutMs?)` → JSON 或 `null` | 在用户发起的插件操作中等待允许的通知。单次最多等待 1000 毫秒。 |
+| `browser` | `context.interaction.openUrl(alias, url)` | 仅用户发起的操作可打开清单 `hosts` 明确允许的 HTTPS 站点。 |
+| `system` | `context.system.read(alias)` | 本机指标包含 `cpuUsagePercent`、`memoryUsedBytes`、`memoryTotalBytes`、`uptimeSeconds`，保留旧的 `cpuPercent` 和 `memoryPercent`。 |
 
 例如，作者声明名为 `metrics` 的 HTTP 权限和名为 `region` 的普通参数。用户把 `metrics` 绑定到服务地址，脚本根据当前状态决定是否继续取详情。
 
 ```js
-import { defineModule } from '@tdisplay/sdk'
+import { defineModule } from '@mado/sdk'
 
 export default defineModule({
   async collect({ region }, context) {
@@ -135,26 +141,42 @@ export default defineModule({
 })
 ```
 
-自定义脚本在独立 QuickJS 进程中运行。网络、文件和进程调用由 Studio 校验授权后代为执行。每次采集最多 24 次宿主调用，I/O 总时长和单次结果大小均受限。主动授权启动的程序以当前用户权限运行。
+每次定时采集最多 24 次 SDK I/O 调用，执行时长和单次结果大小均受限。主动授权启动的程序以当前用户权限运行。脚本可以返回 `state`，由调度器在下一次同实例采集通过 `context.state` 传回。插件用它维护采样缓存，实例或发布版本变化时重置，应用重启后重新采集。可选的 `status` 用于展示插件业务状态。
 
-「测试运行」默认离线。样例数据用 `settings` 提供参数，用 `calls` 提供 `{ operation, alias, params, result }`。样例按实际调用的操作、别名和参数匹配。同一个调用重复出现时，依次消耗对应的样例响应。`operation` 可为 `http`、`readText`、`list`、`run`、`rpc`、`notify` 或 `system`。「用实际资源试跑」打开授权表单，本次测试和定时采集走同一套检查。
+「测试运行」默认离线。样例数据用 `settings` 提供参数，用 `calls` 提供 `{ operation, alias, params, result }`。样例按实际调用的操作、别名和参数匹配。同一个调用重复出现时，依次消耗对应的样例响应。`operation` 可为 `http`、`readText`、`list`、`findFiles`、`readWindow`、`run`、`rpc`、`notify`、`receive`、`openUrl` 或 `system`。「用实际资源试跑」打开授权表单，本次测试和定时采集走同一套检查。
 
-内置系统模块也使用 `context.system.read()`。Codex 脚本通过 `context.process.request()` 查询账号与额度，并在 JS 中选择额度窗口、汇总速度和判断显示哪个任务。Studio 管理 Codex 登录、App Server 握手，以及本地会话日志的读取和事件解析。
+## 插件操作与独立执行
+
+模块可在定义中声明 `actions: ["login"]`，并在入口 `defineModule({ collect, handlers: { login } })` 中实现同名操作。操作由用户发起，可以取消，使用与定时采集相同的授权和输出契约。操作可等待外部进程通知，采集业务决定何时提示、如何确认结果。运行器只负责进程、权限、取消和交互。
+
+`--collect` 模式直接运行带 `manifest.json` 的模块目录，无需启动 Studio 窗口或服务。已构建的可执行文件与 Studio 使用同一个 SDK、权限检查和 QuickJS 子进程。
+
+```sh
+cargo build --manifest-path src-tauri/Cargo.toml
+src-tauri/target/debug/mado-studio --collect shared/collectors/system
+src-tauri/target/debug/mado-studio --collect shared/collectors/codex \
+  --grant "appServer=$(command -v codex)" \
+  --grant "logs=${CODEX_HOME:-$HOME/.codex}"
+```
+
+`--grant 别名=目标` 显式绑定路径或 URL，`--setting 字段=值` 设置普通参数，`--action 名称` 执行声明的操作。命令将读数和状态写为 JSON，运行失败以非零状态退出。Studio 中的自带插件建议路径来自其清单，Codex 的旧连接偏好通过设置适配器迁移。
 
 ## 屏幕配置与设备协议
 
 | 结构 | 必填字段 | 规则 |
 | --- | --- | --- |
 | `WidgetDefinition` | `outputKey`、`kind`、`label`、`supportedSpans: { w, h }[]` | `outputKey` 来自同一模块，输出类型必须兼容 `kind`。规格至少包含 `{ w: 1, h: 1 }`。定义可带渲染参数和默认样式。 |
-| `DisplayConfig` | `schemaVersion: 1`、`profileId: string`、`theme`、`pages: PageConfig[]` | `profileId` 引用屏幕规格，例如 `tdisplay-c5-v1`。主题保存 `active: "dark" 或 "light"` 及两套 `{ background, surface, text }`。颜色统一使用 `#RRGGBB`。 |
+| `DisplayConfig` | `schemaVersion: 1`、`profileId: string`、`theme`、`playback`、`pages: PageConfig[]` | `profileId` 引用屏幕规格，例如 `tdisplay-c5-v1`。主题保存 `active: "dark" 或 "light"` 及两套 `{ background, surface, text }`。颜色统一使用 `#RRGGBB`。 |
 | `PageConfig` | `pageId: string`、`name: string`、`cards: CardConfig[]` | 1 至 5 页，数组顺序即显示顺序，`pageId` 唯一。每页有独立的 4 列 × 2 行网格，可以是空页。 |
-| `CardConfig` | `cardId: string`、`widgetId: string`、`sourceInstanceId: string`、`x`、`y`、`w`、`h` | 来源实例须属于组件所在模块。`cardId` 跨页唯一。坐标为从 0 开始的整数，`w` 是列数，`h` 是行数。卡片不能越界或重叠。v1 在同一份配置中，每组 `(widgetId, sourceInstanceId)` 放置一次。 |
-| `DeviceDisplayConfig` | `schemaVersion`、`profileId`、`theme`、`pages` | 页和布局字段沿用 `DisplayConfig`。每张卡带 `cardId`、位置、规格和解析后的 `render`。`render` 包含 `kind`、`label` 及适用的渲染字段。 |
-| `ReadingFrame` | `configRevision: integer`、`sequence: integer`、`readings` | `readings` 以 `cardId` 为键，包含已配置的全部卡片。每项为对应类型的读数对象或 `null`。读数对象必带 `kind`，且与该卡渲染配置一致。 |
+| `CardConfig` | `cardId: string`、`widgetId: string`、`sourceInstanceId: string`、`x`、`y`、`w`、`h` | 来源实例须属于组件所在模块。`cardId` 跨页唯一。坐标为从 0 开始的整数，`w` 是列数，`h` 是行数。卡片不能越界或重叠。v1 在同一页中，每组 `(widgetId, sourceInstanceId)` 放置一次；可跨页复用，各自使用不同 `cardId`。 |
+| `DeviceDisplayConfig` | `schemaVersion`、`profileId`、`theme`、`playback`、`pages` | 页和布局字段沿用 `DisplayConfig`。每张卡带 `cardId`、位置、规格和解析后的 `render`。`render` 包含 `kind`、`label` 及适用的渲染字段。 |
+| `ReadingFrame` | `configRevision: integer`、`sequence: integer`、`mode: "snapshot" 或 "update"`、`readings` | `readings` 以 `cardId` 为键，包含所有页面已配置的全部卡片；键集合必须与有效配置完全相等，缺键不表示沿用旧值。每项为对应类型的读数对象或 `null`。读数对象必带 `kind`，且与该卡渲染配置一致。 |
 
-`CardConfig.appearance` 可覆盖组件默认的 `accentColor` 和 `stateStyles`。同步时按状态键和属性合并，卡片设置优先。主数值的 `unit` 取自输出定义。状态组件的 `stateLabels` 为该输出的每个状态键提供标签，`detailFields` 选择输出已声明的辅助字段。Studio 在生成设备配置时完成这些解析。设备只需保存渲染配置和按 `cardId` 索引的读数。
+`playback` 为 `{ defaultPageId, rotationSeconds }`，默认页必须存在，轮播秒数为 0/5/10/15/30/60，0 表示关闭。页面数组同时表达页数、顺序和完整布局，没有独立页数事件。`ReadingFrame.mode` 在新会话或配置后的首帧为 `snapshot`，之后为 `update`；所有帧均为全量，模式不表示增量。
 
-状态栏使用设备运行状态，包括当前页 ID、连接方式、供电、电量、固件版本和最近成功同步时间。画布、字号、边距、滚动和动画曲线由 `DisplayProfile` 所引用的[渲染规范](display-ui.md)统一决定。
+`CardConfig.appearance` 可覆盖组件默认的 `accentColor`、`numberAnimation` 和 `stateStyles`。同步时按状态键和属性合并，卡片设置优先。主数值的 `unit` 取自输出定义。状态组件的 `stateLabels` 为该输出的每个状态键提供标签，`detailFields` 选择输出已声明的辅助字段。Studio 在生成设备配置时完成这些解析。设备只需保存渲染配置和按 `cardId` 索引的读数。
+
+状态栏使用设备运行状态，包括当前页 ID、连接方式、供电、电量、固件版本、最后配置应用时间和最后读数应用时间；设备 `Updated at` 显示后者。画布、字号、边距、滚动和动画曲线由 `DisplayProfile` 所引用的[渲染规范](display-ui.md)统一决定。
 
 ## 各 kind 字段
 
@@ -203,7 +225,7 @@ export default defineModule({
 
 ### 写入方请求状态提醒
 
-`notify: true` 请求播放本次提醒。即使状态没变也可以请求，目标状态的时长为 0 时直接显示。重发同一帧沿用原 `sequence`，接收端按连接内的帧序号去重。后续全量帧和重连快照省略该次请求的 `notify`。
+`notify: true` 只允许在 `mode: "update"` 中请求本次提醒。即使状态没变也可以请求，目标状态的时长为 0 时直接显示。重试沿用同一会话、请求 ID、`sequence` 和完整内容；接收端先按请求去重，再检查帧序列。后续全量帧移除该次请求，首次与重连 `snapshot` 禁止携带 `notify: true`。提醒仅在当前页播放，不抢占页面，隐藏页不积压补播。
 
 新的提醒请求从最新状态重新计时。普通更新维持同状态的播放进度。状态变更且本次没有请求提醒时，结束旧提醒并直接显示新状态。
 
@@ -211,7 +233,7 @@ export default defineModule({
 
 | 定义字段 | 必填子字段 | 读数与计算规则 |
 | --- | --- | --- |
-| `chart` | `series: "bar"`、`rangeSeconds: integer`、`sampleCount: integer`、`min: number`、`max: number` | 窗口长度和槽数均为正数，窗口须可按毫秒等分，`min < max`。`values` 长度等于 `sampleCount`，从旧到新。每槽取最后一个有效样本，时间区间左开右闭，以 `windowEndUnixMs` 为锚点。`null` 留空位，最新值标签取末槽。超出绘图值域时贴边，标签保留原值。1 × 1 最多 12 槽。 |
+| `chart` | `series: "bar"`、`rangeSeconds: integer`、`sampleCount: integer`、`min: number`、`max: number` | `values` 长度等于 `sampleCount`，从旧到新，最多 12 项。每次采集从右边加入一项，历史不足时在左边补 `null`。以 `windowEndUnixMs` 为锚点，只使用 `rangeSeconds` 以内的样本。空读数占一列并显示为空，最新值标签取末槽。超出绘图值域时贴边，标签保留原值。 |
 | `trend` | `comparisonSeconds: integer`，可选 `deltaUnit: string`，缺省取 `unit` | 比较周期为正整数。App 用同一口径计算当前值减上一周期值，写入带符号的 `delta`。方向由显示精度下的差值推导。基准缺失时用 `delta: null`，当前值仍可展示。CPU 从 64% 到 68% 为 `delta: 4`，单位是 `pp`。 |
 | `range` | `mode: "fixed"` 时必带 `min`、`max`。`mode: "reading"` 时只声明模式 | 固定模式使用定义边界。动态模式允许读数附 `bounds`，上下限须成对且 `min < max`。指针按 `(value - min) / (max - min)` 定位，越界贴边，读数保留原值。缺少有效动态边界时只显示读数。 |
 
@@ -228,7 +250,7 @@ export default defineModule({
 `src/index.mjs`
 
 ```js
-import { defineModule } from '@tdisplay/sdk'
+import { defineModule } from '@mado/sdk'
 import { readUsage } from './read-usage.mjs'
 
 export default defineModule({
@@ -307,6 +329,7 @@ export function readUsage(cpu) {
     "dark": { "background": "#1E1E1E", "surface": "#4A4A4A", "text": "#F1F1F1" },
     "light": { "background": "#E3E3E3", "surface": "#FAFAFA", "text": "#242424" }
   },
+  "playback": { "defaultPageId": "hosts", "rotationSeconds": 0 },
   "pages": [
     {
       "pageId": "hosts",
@@ -363,6 +386,7 @@ export function readUsage(cpu) {
 {
   "configRevision": 7,
   "sequence": 141,
+  "mode": "update",
   "readings": {
     "a1": { "kind": "chart", "windowEndUnixMs": 1794280800000, "values": [18, 26, null, 42, 35, 61, 0, 73, 54, 88, 64, 68] },
     "a2": { "kind": "trend", "value": 68, "delta": 4 },
@@ -384,24 +408,24 @@ export function readUsage(cpu) {
 
 ## 同步与校验
 
-1. Studio 保存可编辑的 `DisplayConfig`。点击「同步」时解析组件和实例引用，校验组件类型、输出契约、卡片规格、位置和样式，生成 `DeviceDisplayConfig` 并连同 `baseRevision` 提交。
-2. 设备一次性校验配置结构、渲染字段、规格、位置和元数据。成功后应用配置并返回新版本和同步时间，失败时继续使用上一次成功配置。同一份已应用配置重试返回原确认结果。
-3. 配置确认后，Studio 用已确认的卡片绑定及渲染参数生成该 `configRevision` 的全量帧。接收端跳过旧版本和乱序帧。切页直接使用当前有效读数，重连先对齐配置再补发快照。
+1. Studio 保存可编辑的 `DisplayConfig`。应用到显示目标时解析组件和实例引用，校验类型、输出、规格、位置和样式，生成 `DeviceDisplayConfig`，通过统一服务和适配器发送 `config.set`。每个目标使用各自的 `baseRevision`。
+2. 显示端整体校验、持久化并应用完整配置，通过 `result` 确认版本；失败保留旧配置。同一请求重试返回原确认，等值配置不增加版本或重复写入。具体事务与去重规则见统一协议。
+3. 配置确认后，Studio 先生成该版本所有页面全部卡片的 `snapshot`，再发送正常 `update` 全量帧。旧版本、乱序或不完整帧明确拒绝；切页独立使用 `page.set` 或本地交互，无需请求读数。断线保留最近画面与最后读数时间，重连先对齐配置再补发无提醒快照。
 4. 发布新版模块前，Studio 检查现有实例设置和屏幕引用，包括设备仍在使用的已同步布局。删除被引用的组件或输出、改变输出类型或单位、移除仍使用的状态键，以及移除卡片正在使用的规格，都需要先处理受影响的绑定。兼容版本发布后可继续更新现有卡片。标题和样式等渲染变化随下一次「同步」应用。正在运行的旧版本采集结果在实例切换后丢弃。
 5. Studio 保留上一个发布版本。恢复时执行同样的引用和输入配置校验。模块导入、发布或恢复都通过模块目录操作，屏幕配置按设备确认单独生效。
 
 `sdkApiVersion` 是 SDK 契约版本，`moduleRevision` 是模块发布版本，`schemaVersion` 是屏幕配置的结构版本，`configRevision` 是设备成功应用的配置版本，`sequence` 是连接内的帧顺序。
 
-## 内置 Codex 模块迁移
+## 自带 Codex 插件与历史布局兼容
 
-Codex 模块随 Studio 发布。现有 Rust 适配器继续负责登录、CLI 和本地会话读取，并通过 `native` 输入提供额度窗口、重置卡数量、速度和任务状态。模块的 JavaScript 入口通过 `defineModule()` 生成下表中的读数，由脚本选择剩余比例最低的额度窗口，供额度和倒计时卡共同使用。额度和日志保留各自的刷新节奏，来源读数失效时由适配器提供空值。
+Codex 与电脑插件都随 Studio 发布，并使用与用户插件相同的调度器。Codex 的 MJS 实现 App Server 握手、账号与额度查询、登录流程、会话日志解析、速度和任务选择。脚本通过通用 SDK 访问进程、授权目录和浏览器。Rust 设置适配器仅把现有面板的操作和字段映射到通用插件实例。电脑插件读取通用系统指标，由 MJS 产生 CPU、内存和开机时长输出。
 
-| 现有布局 ID | 新 `widgetId` | `outputKey` | SDK 输出 |
-| --- | --- | --- | --- |
-| `quota` | `codex.quota` | `quota` | `progress`，主值为剩余百分比，`ratio` 为主值除以 100 |
-| `speed` | `codex.speed` | `speed` | `number`，单位为 `tok/s` |
-| `resets` | `codex.resets` | `resets` | `number`，单位为「张」 |
-| `quota-reset` | `codex.quota-reset` | `quotaReset` | `deadline`，将现有秒级时间戳转换为 `deadlineUnixMs` |
-| `task` | `codex.task` | `task` | `state`，将会话标题映射到 `detail` |
+| 保留的布局 ID | `outputKey` | SDK 输出 |
+| --- | --- | --- |
+| `quota` | `quota` | `progress`，主值为剩余百分比，`ratio` 为主值除以 100 |
+| `speed` | `speed` | `number`，单位为 `tok/s` |
+| `resets` | `resets` | `number`，单位为「张」 |
+| `quota-reset` | `quotaReset` | `deadline`，将现有秒级时间戳转换为 `deadlineUnixMs` |
+| `task` | `task` | `state`，将会话标题映射到 `detail` |
 
-迁移旧布局时将原 ID 映射到新组件和默认 Codex 实例，保留格子位置。编辑器、桌面控件和 Rust 布局校验使用同一份运行时组件目录。读数按实例更新，再按设备已经确认的布局生成帧。桌面控件已支持 1–5 个独立页面、页面管理、手动翻页及可选轮播；跨格布局仍由设计原型展示。
+Codex 自带插件沿用表中的旧布局 ID，保留既有卡片和格子位置。编辑器、桌面控件和 Rust 布局校验使用同一份运行时组件目录。读数按实例更新，再按设备已经确认的布局生成帧。桌面控件已支持 1–5 个独立页面、页面管理、手动翻页及可选轮播；组件可以使用其声明的跨格规格，卡片外观随布局应用。

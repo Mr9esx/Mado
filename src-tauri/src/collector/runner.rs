@@ -20,11 +20,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-const SDK: &str = "@tdisplay/sdk";
+const SDK: &str = "@mado/sdk";
+const LEGACY_SDK: &str = "@tdisplay/sdk";
 const RESPONSE_LIMIT: usize = 128 * 1024;
 const REQUEST_LIMIT: usize = MAX_PROJECT * 8;
 const CALL_LIMIT: usize = 32 * 1024;
-const REPLY_LIMIT: usize = 768 * 1024;
+const REPLY_LIMIT: usize = 6 * 1024 * 1024;
 const MAX_CALLS: usize = 24;
 pub const RUNNER_FLAG: &str = "--collector-runner";
 
@@ -34,6 +35,10 @@ pub struct Request {
     pub files: BTreeMap<String, String>,
     pub inputs: Value,
     pub sampled_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub state: Value,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -68,9 +73,8 @@ struct Job {
     inspect: bool,
 }
 
-enum Entry<'a> {
+enum Entry {
     Collect,
-    Export(&'a str),
     Inspect,
 }
 
@@ -87,13 +91,13 @@ impl Resolver for ProjectResolver {
         attributes: Option<ImportAttributes<'js>>,
     ) -> rquickjs::Result<String> {
         let invalid = || {
-            Error::new_resolving_message(base, name, "仅支持项目内的相对 JS 路径和 @tdisplay/sdk")
+            Error::new_resolving_message(base, name, "仅支持项目内的相对 JS 路径和 @mado/sdk")
         };
         if attributes.is_some() {
             return Err(invalid());
         }
-        if name == SDK {
-            return Ok(name.into());
+        if matches!(name, SDK | LEGACY_SDK) {
+            return Ok(SDK.into());
         }
         if !(name.starts_with("./") || name.starts_with("../")) {
             return Err(invalid());
@@ -141,20 +145,26 @@ impl Loader for ProjectLoader {
 
 fn run<T: serde::de::DeserializeOwned>(
     request: Request,
-    entry_kind: Entry<'_>,
+    entry_kind: Entry,
     logs: Rc<RefCell<Vec<String>>>,
     broker: impl FnMut(Call) -> Reply + 'static,
 ) -> Result<T, String> {
     let runtime = Runtime::new().map_err(|error| error.to_string())?;
     let start = Instant::now();
+    let max_time = if request.action.is_some() { 185 } else { 12 };
+    let max_calls = if request.action.is_some() {
+        200
+    } else {
+        MAX_CALLS
+    };
     let host_time = Rc::new(Cell::new(Duration::ZERO));
     let waited = Rc::clone(&host_time);
     runtime.set_interrupt_handler(Some(Box::new(move || {
         let elapsed = start.elapsed();
-        elapsed >= Duration::from_secs(12)
+        elapsed >= Duration::from_secs(max_time)
             || elapsed.saturating_sub(waited.get()) >= Duration::from_secs(2)
     })));
-    runtime.set_memory_limit(16 * 1024 * 1024);
+    runtime.set_memory_limit(32 * 1024 * 1024);
     runtime.set_max_stack_size(256 * 1024);
     let entry = request
         .files
@@ -175,7 +185,8 @@ fn run<T: serde::de::DeserializeOwned>(
                       return stringify({
                         name: source.name, schedule: source.schedule, settings: source.settings,
                         inputs: source.inputs, permissions: source.permissions, resources: source.resources,
-                        outputs: source.outputs, widgets: source.widgets,
+                        outputs: source.outputs, widgets: source.widgets, actions: source.actions,
+                        suggestedBindings: source.suggestedBindings,
                       })
                     })(JSON.stringify)"#
                 )?;
@@ -193,7 +204,7 @@ fn run<T: serde::de::DeserializeOwned>(
             let calls = std::cell::Cell::new(0);
             let bridge = Function::new(ctx.clone(), move |encoded: String| {
                 let reply = (|| {
-                    if calls.get() >= MAX_CALLS || encoded.len() > CALL_LIMIT {
+                    if calls.get() >= max_calls || encoded.len() > CALL_LIMIT {
                         return Err("宿主调用超过次数或大小限制。".into());
                     }
                     calls.set(calls.get() + 1);
@@ -211,6 +222,7 @@ fn run<T: serde::de::DeserializeOwned>(
             })?;
             let host: Object = host_factory.call((bridge,))?;
             host.set("sampledAtUnixMs", request.sampled_at as f64)?;
+            host.set("state", ctx.json_parse(serde_json::to_string(&request.state).unwrap())?)?;
             host.set("log", Function::new(ctx.clone(), move |message: String| {
                 let mut logs = logs.borrow_mut();
                 if logs.len() < 40 {
@@ -219,10 +231,11 @@ fn run<T: serde::de::DeserializeOwned>(
             })?)?;
             let (module, load) = Module::declare(ctx.clone(), request.entry, entry)?.eval()?;
             load.finish::<()>()?;
-            let collect: Function = if let Entry::Export(export) = entry_kind {
-                module.get(export)?
+            let definition: Object = module.get("default")?;
+            let collect: Function = if let Some(action) = &request.action {
+                let handlers: Object = definition.get("handlers")?;
+                handlers.get(action.as_str())?
             } else {
-                let definition: Object = module.get("default")?;
                 definition.get("collect")?
             };
             let result: Promise = invoke.call((collect, args, host))?;
@@ -259,19 +272,6 @@ pub fn evaluate_with(request: Request, broker: impl FnMut(Call) -> Reply + 'stat
             definition: None,
         },
     }
-}
-
-pub fn evaluate_export<T: serde::de::DeserializeOwned>(
-    request: Request,
-    export: &str,
-    broker: impl FnMut(Call) -> Reply + 'static,
-) -> Result<T, String> {
-    run(
-        request,
-        Entry::Export(export),
-        Rc::new(RefCell::new(Vec::new())),
-        broker,
-    )
 }
 
 pub(super) fn inspect_code(request: Request) -> Reply {
@@ -367,6 +367,7 @@ fn exchange(
     job: Job,
     mut broker: impl FnMut(Call) -> Reply + Send + 'static,
 ) -> Result<Message, String> {
+    let interactive = job.request.action.is_some();
     let request = serde_json::to_vec(&job).map_err(|error| error.to_string())?;
     if request.len() >= REQUEST_LIMIT {
         return Err("项目或输入过大。".into());
@@ -390,7 +391,7 @@ fn exchange(
                 .write_all(&request)
                 .and_then(|()| input.write_all(b"\n"))
                 .map_err(|error| error.to_string())?;
-            for _ in 0..=MAX_CALLS {
+            for _ in 0..=if interactive { 200 } else { MAX_CALLS } {
                 match read_message(&mut output, RESPONSE_LIMIT)? {
                     Message::Call(call) => {
                         let reply = broker(call);
@@ -411,7 +412,7 @@ fn exchange(
         let _ = send.send(exchange());
     });
     let result = receive
-        .recv_timeout(Duration::from_secs(13))
+        .recv_timeout(Duration::from_secs(if interactive { 186 } else { 13 }))
         .map_err(|_| "采集运行超时或异常退出。".to_string())
         .and_then(|result| result);
     // The result completes the protocol. Reap the runner even if it fails to exit.
@@ -433,12 +434,14 @@ mod tests {
             ]),
             inputs: json!({}),
             sampled_at: 1,
+            action: None,
+            state: Value::Null,
         })
     }
 
     #[test]
     fn loads_project_dependencies_and_awaits_the_collector() {
-        let result = execute("import { defineModule } from '@tdisplay/sdk'; import { value } from './helper.mjs';
+        let result = execute("import { defineModule } from '@mado/sdk'; import { value } from './helper.mjs';
             export default defineModule({ async collect(_, context) { context.log('ok'); return { outputs: { value: { value } } } } });");
         assert_eq!(result.result.unwrap().outputs["value"]["value"], 42);
         assert_eq!(result.logs, ["ok"]);
@@ -468,6 +471,8 @@ mod tests {
             ]),
             inputs: Value::Null,
             sampled_at: 0,
+            action: None,
+            state: Value::Null,
         })
         .unwrap();
         assert_eq!(result["name"], "Test");
@@ -511,6 +516,8 @@ mod capability_tests {
                 files: BTreeMap::from([("index.mjs".into(), source.into())]),
                 inputs: json!({}),
                 sampled_at: 0,
+                action: None,
+                state: Value::Null,
             },
             move |call| {
                 let mut paths = observed.borrow_mut();

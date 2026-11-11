@@ -52,7 +52,12 @@ export function useCodexStatus() {
 
     async function connect() {
       try {
-        const stop = await listen<CodexStatus>('codex-status', ({ payload }) => receive(payload))
+        const stop = await listen<string>('collector-status', ({ payload }) => {
+          if (payload !== 'codex' || !alive) return
+          void invoke<CodexStatus>('get_codex_status').then(receive, reason => {
+            if (alive) setError(String(reason))
+          })
+        })
         if (!alive) {
           stop()
           return
