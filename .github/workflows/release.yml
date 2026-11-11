@@ -163,15 +163,31 @@ jobs:
         with:
           path: release
           merge-multiple: true
-      - name: Check recovery run IDs
+      - name: Wait for targeted rebuilds
         if: inputs.platform == 'publish'
+        timeout-minutes: 30
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_RUN: ${{ inputs.base_run }}
           MAC_RUN: ${{ inputs.mac_run }}
           LINUX_RUN: ${{ inputs.linux_run }}
         run: |
           for id in "$BASE_RUN" "$MAC_RUN" "$LINUX_RUN"; do
             [[ "$id" =~ ^[0-9]+$ ]] || { echo 'Recovery run IDs must be numeric'; exit 1; }
+          done
+          while :; do
+            pending=0
+            for id in "$MAC_RUN" "$LINUX_RUN"; do
+              state=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" \
+                --jq 'if .status == "completed" then .conclusion else "pending" end')
+              case "$state" in
+                success) ;;
+                pending) pending=1 ;;
+                *) echo "Targeted build $id ended with $state"; exit 1 ;;
+              esac
+            done
+            [[ "$pending" == 0 ]] && break
+            sleep 20
           done
       - uses: actions/download-artifact@v7
         if: inputs.platform == 'publish'
