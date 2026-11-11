@@ -125,9 +125,28 @@ export function canPlace(layout: LayoutItem[], item: LayoutItem, catalog = bundl
   if (!Number.isInteger(item.x) || !Number.isInteger(item.y)) return false
   if (item.x < 0 || item.y < 0 || item.x + item.w > display.columns || item.y + item.h > display.rows) return false
 
-  return !layout.some((other) => other.id !== item.id
-    && item.x < other.x + other.w && item.x + item.w > other.x
-    && item.y < other.y + other.h && item.y + item.h > other.y)
+  return !layout.some(other => other.id !== item.id && overlaps(item, other))
+}
+
+function overlaps(item: LayoutItem, other: LayoutItem) {
+  return item.x < other.x + other.w && item.x + item.w > other.x
+    && item.y < other.y + other.h && item.y + item.h > other.y
+}
+
+export function repositionCard(layout: LayoutItem[], item: LayoutItem, catalog = bundledWidgets): LayoutItem[] | undefined {
+  const source = layout.find(card => card.id === item.id)
+  if (canPlace(layout, item, catalog)) {
+    return source ? layout.map(card => card.id === item.id ? item : card) : [...layout, item]
+  }
+  if (!source) return
+
+  const collisions = layout.filter(card => card.id !== item.id && overlaps(item, card))
+  if (collisions.length !== 1) return
+  const [other] = collisions
+  const moved = { ...item, x: other.x, y: other.y }
+  const swapped = { ...other, x: source.x, y: source.y }
+  const next = layout.map(card => card.id === moved.id ? moved : card.id === swapped.id ? swapped : card)
+  if (canPlace(next, moved, catalog) && canPlace(next, swapped, catalog)) return next
 }
 
 export function firstOpenCell(layout: LayoutItem[], id: string, catalog = bundledWidgets): LayoutItem | undefined {

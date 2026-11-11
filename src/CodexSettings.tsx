@@ -28,12 +28,12 @@ type Props = { status?: CodexStatus; error: string; onDismiss: () => void }
 export function CodexSettings({ status, error, onDismiss }: Props) {
   return <Dialog open onOpenChange={open => { if (!open) onDismiss() }}>
     <DialogContent className="settings-dialog" aria-describedby={undefined}>
-      <DialogTitle>数据源设置</DialogTitle>
+      <DialogTitle>Codex 采集器</DialogTitle>
       <CodexSettingsPanel status={status} error={error} />
     </DialogContent>
   </Dialog>
 }
-export function CodexSettingsPanel({ status, error }: Omit<Props, 'onDismiss'>) {
+function CodexSettingsPanel({ status, error }: Omit<Props, 'onDismiss'>) {
   const [pathDraft, setPath] = useState<string>()
   const [pending, setPending] = useState(false)
   const [actionError, setActionError] = useState('')

@@ -6,6 +6,7 @@ import { formatSyncTime } from './status'
 import { WidgetReading } from './WidgetReading'
 import { useAppearance } from './appearance'
 import { DeviceIcon } from './DeviceIcon'
+import type { CardPlaybackFrame } from './useCardPlayback'
 
 export type ScreenConnection = {
   phase: 'waiting' | 'syncing' | 'connected' | 'disconnected' | 'failed'
@@ -30,6 +31,7 @@ type ScreenProps = {
   gridRef?: Ref<HTMLDivElement>
   selected?: string
   dragging?: string
+  playback?: CardPlaybackFrame & { widgetId: string }
   target?: { item: LayoutItem; valid: boolean }
   onSelect?: (id: string) => void
   onRemove?: (id: string) => void
@@ -42,7 +44,7 @@ function placement(item: Pick<LayoutItem, 'x' | 'y' | 'w' | 'h'>): CSSProperties
 }
 
 export function Screen({
-  layout, snapshot, pages, pageId, onPageChange, theme, palette, connection, surface = 'device', gridRef, selected, dragging, target, onSelect, onRemove, onCardPointerDown, onCardKeyDown,
+  layout, snapshot, pages, pageId, onPageChange, theme, palette, connection, surface = 'device', gridRef, selected, dragging, playback, target, onSelect, onRemove, onCardPointerDown, onCardKeyDown,
 }: ScreenProps) {
   const { appearance } = useAppearance()
   const widgets = widgetCatalog(snapshot)
@@ -88,12 +90,13 @@ export function Screen({
           const widget = widgets.get(item.id)
           if (!widget) return null
           const card = pageFrame?.cards.find(candidate => frame?.sourceIds[candidate.cardId] === item.id)
-          const value = card ? frame?.readings[card.cardId] : snapshot?.values[item.id]
+          const trial = playback?.widgetId === item.id ? playback : undefined
+          const value = trial ? trial.value : card ? frame?.readings[card.cardId] : snapshot?.values[item.id]
           const definition = card
             ? { ...widget, ...card.render, name: card.render.label, shortName: card.render.label }
             : cardWidget(widget, item.appearance)
-          const body = <WidgetReading widget={definition} width={item.w} height={item.h}
-            value={value} sequence={snapshot?.sequence} />
+          const body = <WidgetReading key={trial?.playId ?? 'live'} widget={definition} width={item.w} height={item.h}
+            value={value} sequence={trial ? undefined : snapshot?.sequence} />
           const detail = value && typeof value === 'object' ? ('kind' in value ? value.detail : value.title) : null
           const label = detail ? `${widget.name}，${detail}` : widget.name
           const style = placement(item)

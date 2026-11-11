@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { canPlace, cellAt, cellHeight, cellWidth, display, firstOpenCell } from '../src/layout.ts'
+import { canPlace, cellAt, cellHeight, cellWidth, display, firstOpenCell, repositionCard } from '../src/layout.ts'
 
 const quota = { id: 'quota', x: 0, y: 0, w: 1, h: 1 }
 const speed = { id: 'speed', x: 2, y: 0, w: 1, h: 1 }
@@ -17,6 +17,27 @@ test('rejects grid overflow and unsupported spans', () => {
   assert.equal(canPlace([], { ...speed, x: display.columns }), false)
   assert.equal(canPlace([], { ...speed, w: 1, h: 2 }), false)
   assert.equal(canPlace([], { ...resets, x: -1 }), false)
+})
+
+test('dragging onto an occupied cell exchanges the two cards and preserves their appearance', () => {
+  const colored = { ...quota, appearance: { accentColor: '#397ADC' } }
+  assert.deepEqual(repositionCard([colored, speed, resets], { ...colored, x: 2 }), [
+    { ...colored, x: 2 }, { ...speed, x: 0 }, resets,
+  ])
+})
+
+test('a drop can swap with a wider card only when both new footprints fit', () => {
+  const wide = { ...quota, w: 2 }
+  assert.deepEqual(repositionCard([wide, speed], { ...speed, x: 1 }), [
+    { ...wide, x: 2 }, { ...speed, x: 0 },
+  ])
+  assert.equal(repositionCard([wide, { ...speed, x: 3 }], { ...speed, x: 0 }), undefined)
+})
+
+test('a drop cannot displace multiple cards or move another card out of a new card’s way', () => {
+  const wide = { ...quota, w: 2 }
+  assert.equal(repositionCard([wide, speed, { ...resets, x: 3, y: 0 }], { ...wide, x: 2 }), undefined)
+  assert.equal(repositionCard([speed], { ...resets, y: 0 }), undefined)
 })
 
 test('scans for a free cell when adding a card', () => {

@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Screen } from '../../src/Screen'
-import { PageManager, PagePlayback } from '../../src/PageManager'
+import { PageManager } from '../../src/PageManager'
 import { WidgetShell } from '../../src/WidgetShell'
 import { nextPageId } from '../../src/pages'
 import { WidgetReading } from '../../src/WidgetReading'
 import { CardSettings } from '../../src/CardSettings'
+import { useCardPlayback } from '../../src/useCardPlayback'
 import { defaultDisplayTheme, type LayoutItem, type Snapshot, type Widget } from '../../src/layout'
 import '../../src/styles.css'
 import '../../src/collector.css'
@@ -53,7 +54,7 @@ function Preview() {
   const [selected, setSelected] = useState('')
   const [title, setTitle] = useState('整理设备屏显示和同步状态')
   const [card, setCard] = useState<LayoutItem>({ id: 'quota', x: 0, y: 0, w: 1, h: 1 })
-  const [editing, setEditing] = useState(false)
+  const cardPlayback = useCardPlayback(card.id)
   const longError = '请检查 USB 数据线和 Studio 连接设置。\n'.repeat(24)
   const update = (state: string, notify: boolean) => setSnapshot(current => ({ ...current, sequence: current.sequence + 1,
     values: { ...current.values, task: { kind: 'state', state, detail: title, notify } } }))
@@ -66,7 +67,6 @@ function Preview() {
       <button onClick={() => update('error', true)}>异常提醒</button>
       <button onClick={() => setSnapshot(current => ({ ...current, sequence: current.sequence + 1, values: { ...current.values, speed: 80 } }))}>速度 80</button>
       <button onClick={() => setSnapshot(current => ({ ...current, sequence: current.sequence + 1, values: { ...current.values, speed: 90 } }))}>速度 90</button>
-      <button onClick={() => setEditing(true)}>组件设置</button>
     </div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 320px)', gap: '20px 24px' }}>
       {(['dark', 'light'] as const).map(theme => <section key={theme}><p>{theme} · Codex</p><Screen theme={theme} layout={snapshot.layout} snapshot={snapshot} /></section>)}
@@ -76,8 +76,7 @@ function Preview() {
       <section><p>桌面控件 · 未连接硬件、尚未应用</p><Screen surface="desktop" layout={base.layout} snapshot={{ ...base, lastSyncedAt: null }} /></section>
       <section><p>桌面控件 · 已应用</p><Screen surface="desktop" layout={cpu.layout} snapshot={cpu} /></section>
       <section><p>多页管理与工具栏交互</p>
-        <PagePlayback seconds={rotation} disabled={false} onChange={setRotation} />
-        <PageManager pages={pages} selected={currentPage.id} disabled={false}
+        <PageManager pages={pages} selected={currentPage.id} disabled={false} rotationSeconds={rotation} onRotationChange={setRotation}
           onSelect={setPageId} onChange={(next, selected) => { setPages(next); if (selected) setPageId(selected) }} />
         <WidgetShell onPageStep={step} tools={<><button aria-label="上一页" onClick={() => step(-1)}>‹</button><button aria-label="下一页" onClick={() => step(1)}>›</button></>}>
           <Screen surface="desktop" pages={pages} pageId={currentPage.id} layout={currentPage.layout} onPageChange={() => step(1)}
@@ -91,15 +90,17 @@ function Preview() {
         { id: 'speed', x: 2, y: 0, w: 2, h: 1 },
         { id: 'task', x: 2, y: 1, w: 2, h: 1 },
       ]} /></section>
-      <section><p>跨格 · 1 × 4</p><Screen snapshot={snapshot} layout={[
-        { id: 'task', x: 0, y: 0, w: 4, h: 1 }, { ...card, y: 1, h: 1 },
-      ]} /></section>
       <section><p>连接失败 · 长原因</p><Screen layout={[]} connection={{ phase: 'failed', reason: longError }} /></section>
       <section><p>断线保留 · 充电</p><Screen layout={base.layout} snapshot={snapshot}
         connection={{ phase: 'disconnected', hasLayout: true, firmwareVersion: '0.1.0', power: { source: 'battery', percent: null, charging: true } }} /></section>
     </div>
-    {editing && <CardSettings item={card} widget={definitions[0]} theme={defaultDisplayTheme} onChange={setCard}
-      fits={item => item.y + item.h <= 2} onDismiss={() => setEditing(false)} />}
+    <section style={{ marginTop: 20, maxWidth: 476 }}><h2>跨格与组件设置</h2>
+      <Screen snapshot={snapshot} playback={cardPlayback.frame && { ...cardPlayback.frame, widgetId: card.id }} layout={[
+        { id: 'task', x: 0, y: 0, w: 4, h: 1 }, { ...card, y: 1, h: 1 },
+      ]} />
+      <CardSettings item={card} widget={definitions[0]} theme={defaultDisplayTheme} onChange={setCard}
+        currentValue={snapshot.values[card.id]} onPlay={cardPlayback.play} fits={item => item.h === 1 && item.w <= 4} />
+    </section>
   </main>
 }
 createRoot(document.getElementById('root')!).render(<Preview />)
