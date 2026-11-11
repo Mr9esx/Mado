@@ -3,12 +3,23 @@ name: Build and publish release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to rebuild
+        required: true
+        type: string
+      platform:
+        description: Installer to rebuild
+        required: true
+        type: choice
+        options: [macos-arm64, macos-x64, windows-x64, linux-x64]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}-${{ inputs.platform || 'all' }}
 
 jobs:
   desktop:
@@ -16,47 +27,48 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: macos-arm64
-            runner: macos-15
-            target: aarch64-apple-darwin
-            bundles: dmg
-          - platform: macos-x64
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            bundles: dmg
-          - platform: windows-x64
-            runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            bundles: nsis
-          - platform: linux-x64
-            runner: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            bundles: deb,appimage
-    runs-on: ${{ matrix.runner }}
+        platform: ${{ inputs.platform && fromJSON(format('["{0}"]', inputs.platform)) || fromJSON('["macos-arm64","macos-x64","windows-x64","linux-x64"]') }}
+    runs-on: ${{ startsWith(matrix.platform, 'macos-') && 'macos-15-intel' || matrix.platform == 'windows-x64' && 'windows-2025' || 'ubuntu-24.04' }}
     timeout-minutes: 45
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
+      - name: Select build target
+        id: target
+        shell: bash
+        run: |
+          case "$PLATFORM" in
+            macos-arm64) target=aarch64-apple-darwin; bundles=app ;;
+            macos-x64) target=x86_64-apple-darwin; bundles=app ;;
+            windows-x64) target=x86_64-pc-windows-msvc; bundles=nsis ;;
+            linux-x64) target=x86_64-unknown-linux-gnu; bundles=deb,appimage ;;
+          esac
+          printf 'triple=%s\nbundles=%s\n' "$target" "$bundles" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ steps.target.outputs.triple }}
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfuse2
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=25 update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=25 \
+            install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - name: Check release version
         shell: bash
         run: |
           node --input-type=commonjs -e '
             const version = require("./src-tauri/tauri.conf.json").version;
-            if (process.env.GITHUB_REF_NAME !== "v" + version ||
+            if (process.env.RELEASE_TAG !== "v" + version ||
                 require("./package.json").version !== version) {
               throw new Error("Release tag and Studio versions must match");
             }'
@@ -66,27 +78,36 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: '-'
           APPIMAGE_EXTRACT_AND_RUN: '1'
-          TARGET: ${{ matrix.target }}
-          BUNDLES: ${{ matrix.bundles }}
+          TARGET: ${{ steps.target.outputs.triple }}
+          BUNDLES: ${{ steps.target.outputs.bundles }}
         run: npm run tauri -- build --target "$TARGET" --bundles "$BUNDLES" -- --locked
       - name: Collect installers
         shell: bash
         env:
-          TARGET: ${{ matrix.target }}
-          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ steps.target.outputs.triple }}
         run: |
           shopt -s nullglob
           bundle="src-tauri/target/$TARGET/release/bundle"
-          case "$RUNNER_OS" in
-            macOS) files=("$bundle"/dmg/*.dmg); expected=1 ;;
-            Windows) files=("$bundle"/nsis/*.exe); expected=1 ;;
-            Linux) files=("$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage); expected=2 ;;
-          esac
-          [[ ${#files[@]} -eq "$expected" ]]
           mkdir -p release
-          for file in "${files[@]}"; do
-            cp "$file" "release/mado-studio-$GITHUB_REF_NAME-$PLATFORM.${file##*.}"
-          done
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            app="$bundle/macos/Mado Studio.app"
+            codesign --verify --deep --strict "$app"
+            stage=$(mktemp -d)
+            ditto "$app" "$stage/Mado Studio.app"
+            ln -s /Applications "$stage/Applications"
+            dmg="release/mado-studio-$RELEASE_TAG-$PLATFORM.dmg"
+            hdiutil create -volname 'Mado Studio' -srcfolder "$stage" -format UDZO "$dmg"
+            hdiutil verify "$dmg"
+          else
+            case "$RUNNER_OS" in
+              Windows) files=("$bundle"/nsis/*.exe); expected=1 ;;
+              Linux) files=("$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage); expected=2 ;;
+            esac
+            [[ ${#files[@]} -eq "$expected" ]]
+            for file in "${files[@]}"; do
+              cp "$file" "release/mado-studio-$RELEASE_TAG-$PLATFORM.${file##*.}"
+            done
+          fi
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.platform }}
@@ -95,6 +116,7 @@ jobs:
 
   firmware:
     name: Firmware (ESP32-C5)
+    if: github.event_name == 'push'
     runs-on: ubuntu-22.04
     timeout-minutes: 35
     steps:
@@ -119,6 +141,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
+    if: github.event_name == 'push'
     needs: [desktop, firmware]
     runs-on: ubuntu-22.04
     permissions:
