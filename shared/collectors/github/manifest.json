@@ -1,0 +1,141 @@
+{
+  "moduleId": "github",
+  "name": "GitHub",
+  "sdkApiVersion": 2,
+  "entry": "index.mjs",
+  "schedule": {
+    "refreshSeconds": 60,
+    "enabled": false
+  },
+  "settings": {
+    "GITHUB_REPOSITORY": {
+      "label": "仓库",
+      "default": "",
+      "description": "GitHub 仓库，填写 owner/repo 或仓库链接。",
+      "required": true
+    },
+    "GITHUB_TOKEN": {
+      "label": "访问令牌",
+      "default": "",
+      "description": "可选；配置后可提高 API 限额并读取私有仓库。",
+      "required": false,
+      "secret": true
+    }
+  },
+  "resources": {
+    "githubApi": "https://api.github.com"
+  },
+  "permissions": {
+    "githubApi": {
+      "kind": "http",
+      "label": "GitHub API（仅 GET）",
+      "methods": [
+        "GET"
+      ],
+      "hosts": [
+        "api.github.com"
+      ]
+    }
+  },
+  "outputs": {
+    "pullRequests": {
+      "valueType": "number"
+    },
+    "issues": {
+      "valueType": "number"
+    },
+    "ci": {
+      "valueType": "state",
+      "stateKeys": [
+        "success",
+        "failure",
+        "cancelled",
+        "running",
+        "queued",
+        "unknown"
+      ]
+    }
+  },
+  "widgets": {
+    "pull-requests": {
+      "outputKey": "pullRequests",
+      "kind": "metric",
+      "label": "PR数",
+      "shortLabel": "PR数",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 2
+        },
+        {
+          "w": 4,
+          "h": 1
+        }
+      ]
+    },
+    "issues": {
+      "outputKey": "issues",
+      "kind": "metric",
+      "label": "Issue",
+      "shortLabel": "Issue",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 2
+        },
+        {
+          "w": 4,
+          "h": 1
+        }
+      ]
+    },
+    "ci": {
+      "outputKey": "ci",
+      "kind": "state",
+      "label": "CI状态",
+      "shortLabel": "CI状态",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 2
+        },
+        {
+          "w": 4,
+          "h": 1
+        }
+      ],
+      "stateLabels": {
+        "success": "通过",
+        "failure": "失败",
+        "cancelled": "已取消",
+        "running": "运行中",
+        "queued": "排队中",
+        "unknown": "暂无记录"
+      }
+    }
+  }
+}

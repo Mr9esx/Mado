@@ -18,7 +18,7 @@ fn project(manifest: &str, files: &[(&str, &str)], fixture: Value) -> Project {
 }
 
 pub fn projects() -> &'static [Project] {
-    static PROJECTS: OnceLock<[Project; 2]> = OnceLock::new();
+    static PROJECTS: OnceLock<[Project; 3]> = OnceLock::new();
     PROJECTS.get_or_init(|| {
         [
             project(
@@ -66,6 +66,51 @@ pub fn projects() -> &'static [Project] {
                 )],
                 json!({ "calls": [{ "operation": "system", "alias": "system", "params": {},
                 "result": { "cpuUsagePercent": 68, "memoryUsedBytes": 8_589_934_592_u64, "memoryTotalBytes": 17_179_869_184_u64, "memoryAvailableBytes": 8_589_934_592_u64, "systemDiskUsedPercent": 43.2, "networkReceivedBytes": 1000, "networkTransmittedBytes": 500, "uptimeSeconds": 14400 } }] }),
+            ),
+            project(
+                include_str!("../../../shared/collectors/github/manifest.json"),
+                &[
+                    (
+                        "index.mjs",
+                        include_str!("../../../shared/collectors/github/index.mjs"),
+                    ),
+                    (
+                        "client.mjs",
+                        include_str!("../../../shared/collectors/github/client.mjs"),
+                    ),
+                ],
+                json!({
+                    "settings": { "GITHUB_REPOSITORY": "openai/codex" },
+                    "calls": [
+                        {
+                            "operation": "http", "alias": "githubApi",
+                            "params": {
+                                "method": "GET",
+                                "path": "/search/issues?q=repo%3Aopenai%2Fcodex+is%3Apr+is%3Aopen&per_page=1",
+                                "headers": { "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" }
+                            },
+                            "result": { "status": 200, "text": "{\"total_count\":4}" }
+                        },
+                        {
+                            "operation": "http", "alias": "githubApi",
+                            "params": {
+                                "method": "GET",
+                                "path": "/search/issues?q=repo%3Aopenai%2Fcodex+is%3Aissue+is%3Aopen&per_page=1",
+                                "headers": { "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" }
+                            },
+                            "result": { "status": 200, "text": "{\"total_count\":6}" }
+                        },
+                        {
+                            "operation": "http", "alias": "githubApi",
+                            "params": {
+                                "method": "GET",
+                                "path": "/repos/openai/codex/actions/runs?per_page=1",
+                                "headers": { "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" }
+                            },
+                            "result": { "status": 200, "text": "{\"workflow_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\",\"name\":\"CI\"}]}" }
+                        }
+                    ]
+                }),
             ),
         ]
     })
@@ -165,6 +210,82 @@ mod binding_tests {
         assert_eq!(collected.outputs["downloadRate"], Value::Null);
         assert_eq!(collected.state["network"]["receivedBytes"], 1000);
         assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn github_module_declares_config_and_short_widget_titles() {
+        let project = super::get("github").unwrap();
+        let definition = &project.manifest.definition;
+        assert_eq!(project.manifest.module_id, "github");
+        assert_eq!(definition.schedule.as_ref().unwrap().refresh_seconds, 60);
+        assert!(!definition.schedule.as_ref().unwrap().enabled);
+        assert!(definition.settings["GITHUB_REPOSITORY"].required.unwrap());
+        assert_eq!(definition.settings["GITHUB_TOKEN"].secret, Some(true));
+        assert_eq!(definition.settings["GITHUB_TOKEN"].required, Some(false));
+        let labels: Vec<_> = definition.widgets.values().map(|widget| widget.label.as_str()).collect();
+        assert_eq!(labels, ["CI状态", "Issue", "PR数"]);
+    }
+
+    #[test]
+    fn bundled_github_collector_imports_and_projects_rest_results() {
+        use crate::collector::runner::{self, Request};
+        use serde_json::{json, Value};
+
+        let project = super::get("github").unwrap();
+        let result = runner::evaluate_with(
+            Request {
+                entry: project.manifest.entry.clone(),
+                files: project.files.clone(),
+                inputs: json!({ "GITHUB_REPOSITORY": "https://github.com/openai/codex", "GITHUB_TOKEN": "" }),
+                private_settings: vec!["GITHUB_TOKEN".into()],
+                sampled_at: 10_000,
+                action: None,
+                state: Value::Null,
+            },
+            |call| {
+                assert_eq!(call.operation, "http");
+                assert_eq!(call.alias, "githubApi");
+                assert_eq!(call.params["method"], "GET");
+                assert!(call.params["headers"].get("Authorization").is_none());
+                let body = if call.params["path"].as_str().unwrap().contains("is%3Apr") {
+                    json!({ "total_count": 4 })
+                } else if call.params["path"].as_str().unwrap().contains("is%3Aissue") {
+                    json!({ "total_count": 6 })
+                } else {
+                    json!({ "workflow_runs": [{ "status": "completed", "conclusion": "success", "name": "CI" }] })
+                };
+                Ok(json!({ "status": 200, "text": body.to_string() }))
+            },
+        );
+        let collected = result.result.unwrap_or_else(|| panic!("bundled collector failed: {:?}", result.error));
+        assert_eq!(collected.outputs["pullRequests"], json!({ "value": 4 }));
+        assert_eq!(collected.outputs["issues"], json!({ "value": 6 }));
+        assert_eq!(collected.outputs["ci"], json!({ "state": "success", "detail": "CI" }));
+    }
+
+    #[test]
+    fn github_fixture_collects_expected_widget_values() {
+        use crate::collector::{io::Broker, runner::{self, Request}};
+        use serde_json::Value;
+
+        let project = super::get("github").unwrap();
+        let (inputs, mut broker) = Broker::fixture(&project.manifest.definition, &project.fixture).unwrap();
+        let result = runner::evaluate_with(
+            Request {
+                entry: project.manifest.entry.clone(),
+                files: project.files.clone(),
+                inputs,
+                private_settings: vec!["GITHUB_TOKEN".into()],
+                sampled_at: 10_000,
+                action: None,
+                state: Value::Null,
+            },
+            move |call| broker.call(call),
+        );
+        let collected = result.result.unwrap_or_else(|| panic!("fixture collector failed: {:?}", result.error));
+        assert_eq!(collected.outputs["pullRequests"]["value"], 4);
+        assert_eq!(collected.outputs["issues"]["value"], 6);
+        assert_eq!(collected.outputs["ci"]["state"], "success");
     }
 
     #[test]

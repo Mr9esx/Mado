@@ -470,7 +470,13 @@ impl Broker {
         let value = bindings.get(&call.alias).ok_or("资源尚未授权。")?;
         let deadline = self.deadline.min(now + CALL_TIMEOUT);
         match operation {
-            Operation::Http(options) => http(client, value, options, deadline),
+            Operation::Http(options) => {
+                let hosts = match permission {
+                    Permission::Http { hosts, .. } => hosts.as_slice(),
+                    _ => &[],
+                };
+                http(client, value, options, deadline, hosts)
+            },
             Operation::List(path) => {
                 let value = value.clone();
                 filesystem(deadline, move || list(checked_path(&value)?, &path))
@@ -584,8 +590,18 @@ fn http(
     value: &str,
     options: Http,
     deadline: Instant,
+    hosts: &[String],
 ) -> Result<Value, String> {
     let base = url(value)?;
+    if !hosts.is_empty()
+        && (base.scheme() != "https"
+            || base.port_or_known_default() != Some(443)
+            || !base.username().is_empty()
+            || base.password().is_some()
+            || !base.host_str().is_some_and(|host| hosts.iter().any(|allowed| allowed == host)))
+    {
+        return Err("请求超出固定网络主机授权。".into());
+    }
     let target = if options.path.is_empty() {
         base.clone()
     } else {
@@ -970,6 +986,21 @@ mod tests {
             .unwrap();
         assert_eq!(result["status"], 302);
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn http_host_allowlist_rejects_other_targets_before_sending_secrets() {
+        let definition = definition(json!({ "kind": "http", "label": "GitHub API", "hosts": ["api.github.com"] }));
+        let mut broker = Broker::live(
+            &definition,
+            BTreeMap::from([("source".into(), "http://127.0.0.1:9".into())]),
+            client(),
+        );
+        let result = broker.call(call("http", json!({
+            "path": "/repos/a/b",
+            "headers": { "Authorization": "Bearer secret" }
+        })));
+        assert!(result.unwrap_err().contains("固定网络主机"));
     }
 
     #[test]

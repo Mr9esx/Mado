@@ -1,6 +1,7 @@
 import geometry from '../shared/display.json' with { type: 'json' }
 import codexModule from '../shared/collectors/codex/manifest.json' with { type: 'json' }
 import systemModule from '../shared/collectors/system/manifest.json' with { type: 'json' }
+import githubModule from '../shared/collectors/github/manifest.json' with { type: 'json' }
 import type { PowerStatus } from './status'
 
 export type Cell = { x: number; y: number }
@@ -96,7 +97,7 @@ export type WidgetDefinition = Pick<Widget, 'kind' | 'format' | 'accentColor' | 
   outputKey: string; label: string; shortLabel?: string; supportedSpans: { w: number; h: number }[]
 }
 
-const definitions = [codexModule, systemModule].flatMap(module => Object.entries(module.widgets).map(([key, definition]): Widget => {
+const definitions = [codexModule, systemModule, githubModule].flatMap(module => Object.entries(module.widgets).map(([key, definition]): Widget => {
   const { outputKey, label, shortLabel, supportedSpans, ...render } = definition as WidgetDefinition
   const outputs: Record<string, { valueType: string; unit?: string }> = module.outputs
   return {

@@ -135,6 +135,8 @@ pub enum Permission {
         label: String,
         #[serde(default = "get_only")]
         methods: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        hosts: Vec<String>,
     },
     File {
         label: String,
@@ -190,7 +192,7 @@ impl Permission {
         };
         label_valid(self.label())
             && match self {
-                Self::Http { methods, .. } => {
+                Self::Http { methods, hosts, .. } => {
                     !methods.is_empty()
                         && methods.len() <= 6
                         && methods.iter().all(|method| {
@@ -198,6 +200,19 @@ impl Permission {
                                 method.as_str(),
                                 "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"
                             )
+                        })
+                        && hosts.len() <= 8
+                        && hosts.iter().all(|host| {
+                            host.len() <= 253
+                                && host.contains('.')
+                                && !host.starts_with('.')
+                                && !host.ends_with('.')
+                                && host.split('.').all(|part| {
+                                    !part.is_empty()
+                                        && part.bytes().all(|byte| {
+                                            byte.is_ascii_alphanumeric() || byte == b'-'
+                                        })
+                                })
                         })
                 }
                 Self::Process { args, .. } => {
@@ -434,7 +449,7 @@ impl Project {
         if manifest.module_id.len() > 128 || !manifest.module_id.split('.').all(key_valid) {
             return Err("模块 ID 无效。".into());
         }
-        if !trusted && matches!(manifest.module_id.as_str(), "codex" | "system") {
+        if !trusted && matches!(manifest.module_id.as_str(), "codex" | "system" | "github") {
             return Err("此 ID 由内置模块保留。".into());
         }
         if self.files.len() > MAX_FILES
