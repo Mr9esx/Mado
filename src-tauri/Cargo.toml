@@ -13,6 +13,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 indexmap = { version = "2", features = ["serde"] }
 serialport = { version = "4.8", default-features = false }
+espflash = { version = "4.7", default-features = false, features = ["serialport"] }
+esp-idf-part = "0.6"
+flate2 = "1"
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 time = { version = "0.3", features = ["parsing"] }
 walkdir = "2"
 rquickjs = { version = "0.12", features = ["loader"] }

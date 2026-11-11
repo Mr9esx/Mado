@@ -10,6 +10,7 @@ export type DisplayConnectionStatus = {
   phase: 'waiting' | 'syncing' | 'connected' | 'disconnected' | 'failed'
   transport?: DisplayTransport
   deviceId?: string
+  firmwareVersion?: string
   wifiProvisioning?: boolean
   port?: string | null
   brightness?: number

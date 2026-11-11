@@ -1,0 +1,154 @@
+name: Build and publish release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - platform: macos-x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+          - platform: windows-x64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfuse2
+      - name: Check release version
+        shell: bash
+        run: |
+          node --input-type=commonjs -e '
+            const version = require("./src-tauri/tauri.conf.json").version;
+            if (process.env.GITHUB_REF_NAME !== "v" + version ||
+                require("./package.json").version !== version) {
+              throw new Error("Release tag and Studio versions must match");
+            }'
+      - run: npm ci
+      - name: Build installers
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          TARGET: ${{ matrix.target }}
+          BUNDLES: ${{ matrix.bundles }}
+        run: npm run tauri -- build --target "$TARGET" --bundles "$BUNDLES" -- --locked
+      - name: Collect installers
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          shopt -s nullglob
+          bundle="src-tauri/target/$TARGET/release/bundle"
+          case "$RUNNER_OS" in
+            macOS) files=("$bundle"/dmg/*.dmg); expected=1 ;;
+            Windows) files=("$bundle"/nsis/*.exe); expected=1 ;;
+            Linux) files=("$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage); expected=2 ;;
+          esac
+          [[ ${#files[@]} -eq "$expected" ]]
+          mkdir -p release
+          for file in "${files[@]}"; do
+            cp "$file" "release/mado-studio-$GITHUB_REF_NAME-$PLATFORM.${file##*.}"
+          done
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.platform }}
+          path: release/*
+          if-no-files-found: error
+
+  firmware:
+    name: Firmware (ESP32-C5)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+      - run: ./firmware/setup-resources.sh
+      - run: uv run --python 3.12 --script firmware/tools/build_fonts.py
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32c5
+          path: firmware
+      - name: Package firmware
+        run: python3 firmware/tools/package_release.py firmware/build "$GITHUB_REF_NAME" release
+      - uses: actions/upload-artifact@v6
+        with:
+          name: firmware
+          path: release/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [desktop, firmware]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: release
+          merge-multiple: true
+      - name: Publish installers and firmware together
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd release
+          tag="$GITHUB_REF_NAME"
+          assets=(
+            "mado-studio-$tag-macos-arm64.dmg"
+            "mado-studio-$tag-macos-x64.dmg"
+            "mado-studio-$tag-windows-x64.exe"
+            "mado-studio-$tag-linux-x64.deb"
+            "mado-studio-$tag-linux-x64.AppImage"
+            "mado-firmware-$tag-tdisplay-c5-v1.0-install.zip"
+            "mado-firmware-$tag-tdisplay-c5-v1.0-upgrade.zip"
+          )
+          sha256sum "${assets[@]}" > SHA256SUMS.txt
+          cat > notes.md <<'NOTES'
+          - macOS 提供 Apple 芯片与 Intel 芯片的 DMG。应用使用本地签名，未经过 Apple 公证。
+          - Windows x64 提供 NSIS 安装程序，未使用代码签名证书签名。
+          - Linux x64 提供 Debian 安装包和 AppImage。
+          - T-Display-C5 V1.0 首次安装选 `install.zip`。已有 Mado 固件时选 `upgrade.zip`，保留字库和设备配置。在 Studio 的「设备连接 → 烧录固件」选择 ZIP。
+          NOTES
+          gh release create "$tag" "${assets[@]}" SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "Mado $tag" --notes-file notes.md

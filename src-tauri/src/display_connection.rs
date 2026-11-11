@@ -58,6 +58,7 @@ impl Control {
 
 pub struct DisplayConnection {
     control: Mutex<Option<Control>>,
+    port_operation: Mutex<()>,
     provisioning: Mutex<()>,
     status: Arc<Mutex<Value>>,
 }
@@ -65,12 +66,32 @@ impl Default for DisplayConnection {
     fn default() -> Self {
         Self {
             control: Mutex::new(None),
+            port_operation: Mutex::new(()),
             provisioning: Mutex::new(()),
             status: Arc::new(Mutex::new(json!({"phase":"waiting"}))),
         }
     }
 }
 impl DisplayConnection {
+    pub(crate) fn with_firmware_port<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _guard = self
+            .port_operation
+            .try_lock()
+            .map_err(|_| "设备正忙，请稍后重试。")?;
+        self.stop()?;
+        operation()
+    }
+
+    pub(crate) fn firmware_port_in_use(&self) -> bool {
+        matches!(
+            self.port_operation.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        )
+    }
+
     fn stop(&self) -> Result<(), String> {
         let mut control = self.control.lock().map_err(|_| "设备控制锁不可用。")?;
         if let Some(task) = control.take() {
@@ -133,20 +154,24 @@ impl DisplayConnection {
     }
 }
 
-fn ports() -> Vec<String> {
-    let mut ports: Vec<_> = serialport::available_ports()
+pub(crate) fn esp_usb_ports() -> impl Iterator<Item = (String, serialport::UsbPortInfo)> {
+    serialport::available_ports()
         .unwrap_or_default()
         .into_iter()
         .filter_map(|p| match p.port_type {
             serialport::SerialPortType::UsbPort(info)
-                if info.vid == 0x303a && info.pid == 0x1001 =>
+                if info.vid == 0x303a
+                    && info.pid == 0x1001
+                    && !p.port_name.starts_with("/dev/tty.") =>
             {
-                Some(p.port_name)
+                Some((p.port_name, info))
             }
             _ => None,
         })
-        .filter(|name| !name.starts_with("/dev/tty."))
-        .collect();
+}
+
+fn ports() -> Vec<String> {
+    let mut ports: Vec<_> = esp_usb_ports().map(|(name, _)| name).collect();
     ports.sort();
     ports.dedup();
     ports
@@ -411,6 +436,10 @@ fn start_if_current(
     if !(500..=60_000).contains(&interval) || !(-840..=840).contains(&offset) {
         return Err("推送周期须在 500–60000 ms 之间。".into());
     }
+    let _guard = display
+        .port_operation
+        .try_lock()
+        .map_err(|_| "设备正忙，请稍后重试。")?;
     let mut control = display.control.lock().map_err(|_| "设备控制锁不可用。")?;
     if expected.is_some() && control.as_ref().map(|task| task.id) != expected {
         return Err("Wi-Fi 配对已保存。当前连接已变更，请从设备面板选择 Wi-Fi。".into());

@@ -128,6 +128,34 @@ python -m esptool --chip esp32c5 --port /dev/cu.usbmodem2101 write_flash 0x99000
 
 初次烧录前可用 `read_flash 0x0 0x1000000 <备份路径>` 备份出厂 Flash。后续仅更新应用使用 `idf.py -C firmware -p <串口> app-flash`，保留配置与字库。更新字库时单独写字体分区。App 和协议读取通过 USB，应用日志默认通过 UART。
 
+## Studio 烧录包
+
+从 [GitHub Releases](https://github.com/Mr9esx/Mado/releases/latest) 下载 ZIP 文件。首次安装选 `install.zip` 结尾的文件，已有 Mado 固件时可选 `upgrade.zip`。通过 Studio 的「设备连接」→「烧录固件」选择本地文件和 USB 串口。烧录前确认板背丝印为 V1.0。自动进入下载模式失败时，断开开发板电源，按住 BOOT 接入 USB，松开 BOOT 后刷新串口并勾选「已手动进入下载模式」。
+
+ZIP 根目录包含 `manifest.json` 和清单中的全部 `.bin`，压缩包大小不超过 16 MiB。下面是应用升级包的清单。将 `sha256` 的示例值替换成镜像的 SHA-256，共 64 个十六进制字符，可用 `shasum -a 256 mado.bin` 生成。
+
+```json
+{
+  "schemaVersion": 1,
+  "board": "LILYGO T-Display-C5 V1.0",
+  "chip": "esp32c5",
+  "version": "0.1.0",
+  "mode": "upgrade",
+  "images": [
+    { "file": "mado.bin", "offset": 65536, "sha256": "<mado.bin 的 SHA-256>" }
+  ]
+}
+```
+
+| 镜像 | 写入地址 | 清单中的十进制地址 | 使用场景 |
+| --- | ---: | ---: | --- |
+| ESP-IDF 生成的 `bootloader.bin` | `0x2000` | 8192 | 首次安装 |
+| ESP-IDF 生成的 `partition-table.bin` | `0x8000` | 32768 | 首次安装 |
+| ESP-IDF 生成的 `mado.bin` | `0x10000` | 65536 | 首次安装、应用升级 |
+| `fonts.bin` | `0x990000` | 10027008 | 首次安装 |
+
+首次安装包将 `mode` 设为 `install`，列出四个镜像及各自的 SHA-256。应用升级包使用 `upgrade`，只列出应用镜像，要求设备已有兼容的 Mado 分区表和字库。SHA-256 用于发现镜像损坏，请从信任的来源下载烧录包。
+
 ## 实板验收
 
 ```sh

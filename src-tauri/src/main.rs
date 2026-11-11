@@ -1,14 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod appearance;
+mod ble_display;
 mod codex;
 mod collector;
 mod desktop_widget;
 mod device;
-mod display_wire;
-mod ble_display;
-mod wifi_display;
 mod display_connection;
+mod display_wire;
+mod firmware_flash;
+mod wifi_display;
 
 use device::{Device, DisplayPage, DisplayTheme, LayoutItem, PowerStatus};
 use std::{
@@ -117,6 +118,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .manage(Mutex::new(Device::new(power)))
         .manage(display_connection::DisplayConnection::default())
+        .manage(firmware_flash::FlashSelection::default())
         .setup(|app| {
             appearance::start(app.handle())?;
             desktop_widget::start(app.handle())?;
@@ -138,6 +140,8 @@ fn main() {
             appearance::update_appearance,
             get_snapshot,
             display_connection::list_usb_displays,
+            firmware_flash::choose_firmware_package,
+            firmware_flash::flash_firmware_package,
             display_connection::get_display_connection_status,
             display_connection::connect_usb_display,
             ble_display::scan_ble_displays,
@@ -187,6 +191,13 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Mado Studio failed to start")
         .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { api, .. }
+                if app
+                    .state::<display_connection::DisplayConnection>()
+                    .firmware_port_in_use() =>
+            {
+                api.prevent_exit();
+            }
             tauri::RunEvent::Exit => collector::process::terminate_active(),
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {

@@ -34,7 +34,9 @@
 
 ## 快速开始
 
-当前版本可以从源码运行。以下命令以 macOS 为例，需要 Node.js 22.18+、Rust 和 [Tauri 构建依赖](https://v2.tauri.app/start/prerequisites/)。
+从 [GitHub Releases](https://github.com/Mr9esx/Mado/releases/latest) 下载对应的安装包。macOS 提供 Apple 芯片与 Intel 芯片的 DMG，Windows x64 提供安装程序，Linux x64 提供 `.deb` 和 AppImage。固件烧录包也在同一页。
+
+从源码运行时，以下命令以 macOS 为例，需要 Node.js 22.18+、Rust 1.95+ 和 [Tauri 构建依赖](https://v2.tauri.app/start/prerequisites/)。
 
 ```sh
 git clone https://github.com/Mr9esx/Mado.git
@@ -49,7 +51,7 @@ npm run tauri dev
 
 ## 连接实体屏
 
-先按[构建与烧录说明](docs/firmware-resources.md#构建与烧录)为 **LILYGO T-Display-C5 V1.0** 准备固件。然后打开 Studio 预览底栏的设备连接面板，选择一种方式：
+自行下载适用于 **LILYGO T-Display-C5 V1.0** 的 [Mado ZIP 烧录包](docs/firmware-resources.md#studio-烧录包)。接上 USB 数据线，在 Studio 预览底栏打开「设备连接」→「烧录固件」，选择 ZIP 和串口。烧录完成后返回连接面板，选择一种方式：
 
 - **USB**：接上 USB 数据线，选择设备端口，再点「连接设备」。第一次使用可以从 USB 开始。
 - **蓝牙（macOS）**：长按开发板的 BOOT 键进入设置，在设备上开启「蓝牙配对」。回到 Studio 扫描并连接，按系统提示输入屏上的六位码。
