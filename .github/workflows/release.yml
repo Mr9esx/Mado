@@ -38,7 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: ${{ inputs.platform && fromJSON(format('["{0}"]', inputs.platform)) || fromJSON('["macos-arm64","macos-x64","windows-x64","linux-x64"]') }}
-    runs-on: ${{ startsWith(matrix.platform, 'macos-') && 'macos-15-intel' || matrix.platform == 'windows-x64' && 'windows-2025' || 'ubuntu-24.04' }}
+    runs-on: ${{ startsWith(matrix.platform, 'macos-') && 'macos-15-intel' || matrix.platform == 'windows-x64' && 'windows-2025' || 'ubuntu-22.04' }}
     timeout-minutes: 45
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -70,8 +70,23 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 8
         run: |
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=25 update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=25 \
+          mirror=
+          for candidate in https://archive.ubuntu.com/ubuntu https://mirrors.edge.kernel.org/ubuntu https://ubuntu.osuosl.org/ubuntu; do
+            if curl -fLsSI --connect-timeout 5 --max-time 10 "$candidate/dists/jammy-security/InRelease" > /dev/null; then
+              mirror="$candidate"
+              break
+            fi
+          done
+          [[ -n "$mirror" ]] || { echo 'No reachable Ubuntu package mirror'; exit 1; }
+          source="$RUNNER_TEMP/mado-ubuntu.list"
+          for suite in jammy jammy-updates jammy-security; do
+            printf 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] %s %s main universe\n' \
+              "$mirror" "$suite" >> "$source"
+          done
+          options=(-o "Dir::Etc::sourcelist=$source" -o Dir::Etc::sourceparts=-
+                   -o Acquire::Retries=1 -o Acquire::https::Timeout=15)
+          sudo apt-get "${options[@]}" --error-on=any update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get "${options[@]}" \
             install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - name: Check release version
         shell: bash
