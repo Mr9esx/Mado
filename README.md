@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/display-ui-spans.png" width="748" alt="Mado 界面原型，展示深浅配色和跨格卡片">
+  <a href="docs/images/mado-hero.webp"><img src="docs/images/mado-hero.webp" width="900" alt="Mado Studio 的布局编辑器、JavaScript 采集器与实体屏"></a>
 </p>
 
 ## 简介
