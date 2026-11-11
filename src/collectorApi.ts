@@ -11,6 +11,17 @@ export type Draft = {
   sdkApiVersion: number
 }
 
+export type CollectorInstance = {
+  id: string
+  name: string
+  enabled: boolean
+  updatedAt?: number | null
+  error?: string | null
+  activeAction?: string | null
+}
+
+export type InstanceChange = { kind: 'create' } | { kind: 'rename'; id: string; name: string } | { kind: 'delete'; id: string }
+
 export type ModuleSummary = {
   id: string
   name: string
@@ -21,7 +32,8 @@ export type ModuleSummary = {
   actions: string[]
   actionInstance: string | null
   activeAction: string | null
-  variableInstances: { id: string; name: string; enabled: boolean }[]
+  allowsMultipleInstances: boolean
+  variableInstances: CollectorInstance[]
 }
 
 export type Catalog = {
@@ -71,6 +83,7 @@ export type Definition = {
   settings?: Record<string, { label: string; default?: string; description?: string; required?: boolean; secret?: boolean }>
   permissions?: Record<string, Permission>
   schedule?: { refreshSeconds: number; enabled: boolean }
+  instances?: { mode: 'single' | 'multiple'; batch?: boolean }
   resources?: Record<string, string>
   outputs?: Record<string, { valueType: string; unit?: string }>
   widgets?: Record<string, WidgetDefinition>
@@ -106,6 +119,9 @@ export const saveCollectorVariables = (id: string, values: Record<string, string
   invoke<CollectorInstanceStatus>('save_collector_variables', { id, values })
 export const setCollectorEnabled = (id: string, enabled: boolean, approval?: Approval) =>
   invoke<CollectorInstanceStatus>('set_collector_enabled', { id, enabled, approval })
+export const manageCollectorInstance = (moduleId: string, change: InstanceChange) =>
+  invoke<string>('manage_collector_instance', { moduleId, change })
+export const getInstanceGrants = (id: string) => invoke<GrantRequest[]>('collector_instance_grants', { id })
 export const runCollectorAction = (id: string, action: string) =>
   invoke<void>('run_collector_action', { id, action })
 export const cancelCollectorAction = (id: string) =>
@@ -113,8 +129,10 @@ export const cancelCollectorAction = (id: string) =>
 export const getDraft = (id: string) => invoke<Draft>('collector_draft', { id })
 export const createDraft = (name: string, template: string) => invoke<Draft>('create_collector', { name, template })
 export const saveDraft = (draft: Draft) => invoke<void>('save_collector', { draft })
-export const getGrantRequests = (target: Draft, restore: boolean, live: boolean) => invoke<GrantRequest[]>('collector_grants', { target, restore, live })
-export const testDraft = (target: Draft, live: boolean, approval?: Approval) => invoke<TestResult>('test_collector', { target, live, approval })
+export const getGrantRequests = (target: Draft, restore: boolean, live: boolean, instanceId?: string) =>
+  invoke<GrantRequest[]>('collector_grants', { target, restore, live, instanceId })
+export const testDraft = (target: Draft, live: boolean, approval?: Approval, instanceId?: string) =>
+  invoke<TestResult>('test_collector', { target, live, approval, instanceId })
 export const chooseResource = (kind: string) => invoke<string | null>('choose_json_input', { kind })
 export const publishDraft = (id: string, restore: boolean, approval?: Approval) => invoke<Catalog>('publish_collector', { id, restore, approval })
 export const inspectImport = () => invoke<ImportReview | null>('inspect_collector_import')

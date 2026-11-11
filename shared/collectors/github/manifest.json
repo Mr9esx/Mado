@@ -3,6 +3,7 @@
   "name": "GitHub",
   "sdkApiVersion": 2,
   "entry": "index.mjs",
+  "instances": { "mode": "multiple" },
   "schedule": {
     "refreshSeconds": 60,
     "enabled": false

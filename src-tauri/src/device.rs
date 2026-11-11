@@ -110,6 +110,10 @@ pub struct Widget {
     pub group: String,
     #[serde(default)]
     pub group_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_name: Option<String>,
     pub name: String,
     pub short_name: String,
     pub unit: String,

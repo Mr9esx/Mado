@@ -93,6 +93,8 @@
 .collector-workbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px 10px; }
 .collector-workbar h2 { margin: 0; font-size: 16px; line-height: 1.35; font-weight: 600; overflow-wrap: anywhere; }
 .collector-workbar span { font-size: 11px; color: var(--muted-foreground); }
+.collector-module-title { display: flex; align-items: center; gap: 8px; }
+.collector-module-tag { flex: none; padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; }
 .collector-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .collector-workbench {
   display: grid;
@@ -193,6 +195,18 @@
 .collector-variable-input input { min-width: 0; }
 .collector-variable-input small, .collector-variable-input button { flex: none; }
 .collector-variable-form .collector-form-actions { grid-column: 1 / -1; margin-top: 0; }
+.collector-instance-header, .collector-instance-edit, .collector-instance-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.collector-instance-header { justify-content: space-between; }
+.collector-instance-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.collector-instance-list button[aria-pressed="true"] { border-color: var(--foreground); }
+.collector-instance-list small { color: var(--muted-foreground); }
+.collector-instance-edit, .collector-instance-confirm { margin-bottom: 12px; }
+.collector-instance-edit input { min-width: 0; max-width: 260px; }
+.collector-instance-confirm { flex-wrap: wrap; font-size: 12px; }
 
 @media (max-width: 860px) {
   .collector-workbar { flex-wrap: wrap; }

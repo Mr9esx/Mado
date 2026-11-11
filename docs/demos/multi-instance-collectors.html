@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>多实例采集器 · 交互方案</title>
+<style>
+:root{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;color:#202124;background:#f5f6f8;font-synthesis:none}*{box-sizing:border-box}body{margin:0}.shell{max-width:1180px;margin:32px auto;padding:0 24px}.top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:22px}.eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#777d87;font-weight:700}.top h1{font-size:26px;letter-spacing:-.03em;margin:7px 0 5px}.sub{color:#68707c;font-size:14px}.tabs{display:flex;gap:4px;padding:4px;border:1px solid #e3e5e9;background:#fff;border-radius:11px}.tabs button{border:0;background:transparent;padding:9px 14px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;color:#737984;cursor:pointer}.tabs button.active{background:#202124;color:white}.panel{display:none}.panel.active{display:block}.card{background:#fff;border:1px solid #e3e5e9;border-radius:14px;box-shadow:0 2px 8px #19202c08}.app{overflow:hidden}.bar{height:52px;border-bottom:1px solid #e9eaed;display:flex;align-items:center;justify-content:space-between;padding:0 20px}.brand{font-size:13px;font-weight:700}.nav{display:flex;gap:7px}.nav span{font-size:12px;color:#686e78;padding:8px 10px;border-radius:7px}.nav .selected{background:#f0f1f4;color:#202124}.workspace{display:grid;grid-template-columns:255px 1fr;min-height:640px}.side{padding:18px 14px;border-right:1px solid #e9eaed}.sidehead,.rowhead,.sectionhead{display:flex;align-items:center;justify-content:space-between}.sidehead{padding:0 4px 13px;font-weight:700;font-size:14px}.list{display:grid;gap:7px}.mod{border:1px solid #e5e6ea;border-radius:9px;padding:11px 12px;font-size:13px;color:#737985}.mod.active{border-color:#c7c9f6;background:#f6f6ff;color:#33355f;font-weight:650}.content{padding:18px 20px 22px;min-width:0}.crumb{font-size:12px;color:#828793;margin:0 0 14px}.sectionhead h2{font-size:17px;margin:0}.muted{font-size:12px;color:#818692}.btn{border:1px solid #dfe1e6;border-radius:8px;background:#fff;color:#25272c;padding:8px 11px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer}.btn.primary{background:#282b31;border-color:#282b31;color:white}.btn.soft{background:#f6f6f8}.btn:active{transform:translateY(1px)}.instances{display:grid;gap:9px;margin-top:14px}.instance{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:12px 13px;border:1px solid #e5e6ea;border-radius:10px;cursor:pointer}.instance.active{border-color:#a7a9ee;box-shadow:0 0 0 2px #eeeeff}.i-title{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:650}.dot{width:8px;height:8px;border-radius:50%;background:#30a46c}.dot.off{background:#c0c3ca}.i-meta{margin:5px 0 0 17px;font-size:11px;color:#7c828c}.switch{width:34px;height:19px;border:0;border-radius:12px;background:#b7bac1;padding:2px;cursor:pointer}.switch:after{content:"";display:block;width:15px;height:15px;border-radius:50%;background:#fff;transition:.15s}.switch.on{background:#3638a4}.switch.on:after{transform:translateX(15px)}.formbox{margin-top:18px;padding:16px;border:1px solid #e7e8ec;border-radius:11px;background:#fcfcfd}.formtitle{font-size:13px;font-weight:700;margin-bottom:13px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field label{display:block;font-size:11px;color:#5f6570;margin-bottom:6px}.field input{width:100%;border:1px solid #dfe1e6;border-radius:7px;padding:9px 10px;font-family:inherit;font-size:13px;outline:none}.field input:focus{border-color:#8587db;box-shadow:0 0 0 3px #8587db20}.hint{font-size:10px;color:#8b9099;margin-top:5px}.formfoot{display:flex;justify-content:space-between;align-items:center;margin-top:13px}.good{font-size:11px;color:#39815c}.preview{margin-top:18px}.preview h3{font-size:13px;margin:0 0 9px}.layout{height:168px;border:1px solid #e5e6ea;border-radius:10px;background:linear-gradient(45deg,#fafafa,#f4f4f7);padding:16px;display:flex;gap:9px;align-items:flex-start}.widget{width:160px;height:90px;background:#484848;border:3px solid #262626;color:#f3f3f3;display:flex;flex-direction:column;justify-content:space-between;padding:9px 10px;box-shadow:inset 0 2px #bdbdbd}.w-label{font-size:11px;font-weight:700}.w-state{font-size:16px;font-weight:750}.w-detail{font-size:10px;opacity:.78}.empty{font-size:12px;color:#999;margin:auto}.library{margin-top:14px;padding:13px 14px;border:1px solid #e7e8ec;border-radius:10px}.libtitle{font-size:12px;font-weight:700;margin-bottom:10px}.librow{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid #f0f1f3;font-size:12px}.librow:first-of-type{border-top:0}.tag{border-radius:5px;padding:3px 6px;background:#f0f1f4;color:#747985;font-size:10px}.note{font-size:11px;color:#757b86;margin-top:12px;line-height:1.6}.dev{padding:24px}.devgrid{display:grid;grid-template-columns:.9fr 1.1fr;gap:18px}.dev h2{margin:0 0 6px;font-size:18px}.dev p{margin:0 0 17px;color:#717783;font-size:13px;line-height:1.6}.step{display:flex;gap:12px;padding:14px 0;border-top:1px solid #eceef1}.num{width:24px;height:24px;border-radius:7px;background:#f0f0fb;color:#4245a1;display:grid;place-items:center;font-size:11px;font-weight:700;flex:none}.step b{font-size:12px}.step div div{font-size:11px;line-height:1.55;color:#757b86;margin-top:4px}.codebox{overflow:hidden;border:1px solid #e5e6ea;border-radius:11px;background:#17191e}.codehead{height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;color:#c8cbd2;border-bottom:1px solid #2e3038;font-size:11px}.codehead button{border:1px solid #41434b;background:#22242a;color:#eee;border-radius:5px;padding:4px 7px;font-size:10px;cursor:pointer}pre{margin:0;padding:16px;overflow:auto;color:#e1e4eb;font:11px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre}.kw{color:#c792ea}.str{color:#c3e88d}.key{color:#82aaff}.comment{color:#858b98}.callout{margin-top:14px;padding:12px 13px;border-radius:9px;background:#f5f5ff;border:1px solid #e7e6fc;color:#55577a;font-size:11px;line-height:1.6}.flow{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:12px}.flow span{font-size:10px;padding:7px 9px;border:1px solid #e6e7eb;border-radius:7px;background:#fff;color:#646a75}.arrow{color:#a0a4ad}.footer{font-size:10px;color:#969ba4;text-align:right;margin:12px 2px 0}.toast{position:fixed;bottom:20px;left:50%;transform:translate(-50%,15px);background:#22252b;color:#fff;border-radius:8px;padding:10px 14px;font-size:12px;opacity:0;transition:.2s;pointer-events:none}.toast.show{opacity:1;transform:translate(-50%,0)}@media(max-width:800px){.shell{margin:18px auto;padding:0 12px}.top{gap:12px;flex-direction:column}.workspace{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid #e9eaed}.side .list{grid-template-columns:repeat(3,1fr)}.side .mod{padding:8px;font-size:11px}.devgrid{grid-template-columns:1fr}.fields{grid-template-columns:1fr}.content{padding:16px}.layout{overflow:auto}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="top"><div><div class="eyebrow">MADO STUDIO · DESIGN DEMO</div><h1>一个模块，多份实例配置</h1><div class="sub">用户按实例配置与摆卡；开发者只定义一次参数、权限和批量脚本。</div></div><div class="tabs" role="tablist"><button class="active" data-tab="user">用户怎么用</button><button data-tab="dev">开发怎么写</button></div></header>
+  <section id="user" class="panel active">
+    <div class="card app">
+      <div class="bar"><div class="brand">◉ Mado Studio</div><div class="nav"><span>桌面控件</span><span class="selected">采集器</span><span>设备</span><span>设置</span></div></div>
+      <div class="workspace">
+        <aside class="side"><div class="sidehead"><span>采集器</span><button class="btn" id="addInstance">＋ 新增实例</button></div><div class="list"><div class="mod">Codex</div><div class="mod">系统</div><div class="mod">GitHub</div><div class="mod active">B 站直播</div></div><div class="note">一个模块可以有多份实例。脚本与组件定义共用，配置和运行状态分别保存。</div></aside>
+        <section class="content">
+          <div class="crumb">内置模块　/　B 站直播</div>
+          <div class="sectionhead"><h2>采集实例</h2><span class="muted">共享采样规则 · 每份配置独立运行</span></div>
+          <div class="instances" id="instances"></div>
+          <div class="formbox"><div class="rowhead"><div class="formtitle" id="formTitle">实例配置 · 主播 1</div><span class="tag">B站直播</span></div><div class="fields"><div class="field"><label>实例名称</label><input id="nameField" value="主播 1"></div><div class="field"><label>B 站 UID <b style="color:#b44">*</b></label><input id="uidField" value="10101" placeholder="填写 UID"></div></div><div class="hint">参数按实例保存。必填项为空时，该实例不能启用。</div><div class="formfoot"><span class="good" id="formStatus">配置完整 · 已启用</span><button class="btn primary" id="save">保存配置</button></div></div>
+          <div class="preview"><div class="sectionhead"><h3>屏幕布局</h3><span class="muted">当前页 · 添加实例组件后可独立排序</span></div><div class="layout" id="layout"></div></div>
+          <div class="library"><div class="libtitle">组件库 · 按实例分组</div><div id="componentLibrary"></div></div>
+          <div class="note">卡片绑定到实例 ID。改配置、停用或删除某个实例时，其余实例的读数和状态不受影响。</div>
+        </section>
+      </div>
+    </div>
+  </section>
+  <section id="dev" class="panel">
+    <div class="card dev">
+      <h2>开发者：定义一次，批量处理实例</h2><p>Manifest 声明“允许多实例”、变量与组件；脚本可选实现 <code>collectBatch</code>。框架把同一模块的启用实例打包调用，并要求结果按 instanceId 返回。</p>
+      <div class="devgrid">
+        <div>
+          <div class="step"><span class="num">1</span><div><b>声明实例策略与变量</b><div>变量是每份实例配置，不是模块全局值。旧模块未声明多实例时继续按单实例工作。</div></div></div>
+          <div class="step"><span class="num">2</span><div><b>在 collectBatch 里逐实例读取参数</b><div>按实例隔离状态与错误。上游有批量 API 时可合并网络请求；没有时也可在一次脚本运行中逐个请求。</div></div></div>
+          <div class="step"><span class="num">3</span><div><b>用组件键生成实例卡片</b><div>组件定义只写一次。宿主生成 instanceId + widgetKey 的稳定 ID，并把每张卡绑定回来源实例。</div></div></div>
+          <div class="flow"><span>Manifest 定义</span><i class="arrow">→</i><span>N 个 Instance</span><i class="arrow">→</i><span>collectBatch</span><i class="arrow">→</i><span>N 组结果 / 卡片</span></div>
+          <div class="callout"><b>批量调度 ≠ 一次 HTTP 请求。</b>脚本可以一次收到 N 个实例，但是否能向服务端合成一个请求，由该 API 是否支持决定；结果仍逐实例返回。</div>
+        </div>
+        <div class="codebox"><div class="codehead"><span>manifest.json + index.mjs</span><button id="copy">复制脚本</button></div><pre id="snippet">// manifest.json（节选）
+{
+  &quot;moduleId&quot;: &quot;bilibili&quot;,
+  &quot;instances&quot;: {
+    &quot;mode&quot;: &quot;multiple&quot;,
+    &quot;batch&quot;: true
+  },
+  &quot;settings&quot;: {
+    &quot;BILIBILI_UID&quot;: {
+      &quot;label&quot;: &quot;主播 UID&quot;,
+      &quot;default&quot;: &quot;&quot;,
+      &quot;description&quot;: &quot;填写 B 站用户空间 UID，应用会读取公开的直播间状态。&quot;,
+      &quot;required&quot;: true
+    }
+  },
+  &quot;outputs&quot;: {
+    &quot;liveStatus&quot;: {
+      &quot;valueType&quot;: &quot;state&quot;,
+      &quot;detailKeys&quot;: [
+        &quot;title&quot;,
+        &quot;url&quot;
+      ],
+      &quot;stateKeys&quot;: [
+        &quot;live&quot;,
+        &quot;offline&quot;
+      ]
+    }
+  }
+}
+
+// index.mjs
+import { defineModule } from &#x27;@mado/sdk&#x27;
+import { collectBilibili } from &#x27;./client.mjs&#x27;
+
+export default defineModule({
+  async collect(settings, context) {
+    return collectBilibili(settings, context, context.state)
+  },
+  async collectBatch(instances, context) {
+    const results = []
+    for (const { id, settings, state } of instances) {
+      try {
+        const result = await collectBilibili(settings, context.forInstance(id), state)
+        results.push({ instanceId: id, ...result })
+      } catch (error) {
+        results.push({ instanceId: id, error: error.message })
+      }
+    }
+    return { results }
+  },
+})
+</pre></div>
+      </div>
+      <div class="footer">参数、权限和输出的完整定义见采集器模块文档。</div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+const data=[{id:1,name:'主播 1',uid:'10101',live:true,enabled:true,added:true},{id:2,name:'主播 2',uid:'20202',enabled:true,added:true},{id:3,name:'主播 3',uid:'30303',enabled:false,added:true}];let selected=1;const $=s=>document.querySelector(s);const instances=$('#instances');const escapeHTML=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1500)}function render(){instances.innerHTML=data.map(x=>`<div class="instance ${x.id===selected?'active':''}" data-id="${x.id}"><div><div class="i-title"><span class="dot ${x.enabled?'':'off'}"></span>${escapeHTML(x.name)}</div><div class="i-meta">UID ${escapeHTML(x.uid||'未配置')} · ${x.enabled?'采集正常':'已停用'}</div></div><button class="switch ${x.enabled?'on':''}" data-toggle="${x.id}" aria-label="启停 ${escapeHTML(x.name)}"></button></div>`).join('');const curr=data.find(x=>x.id===selected);$('#formTitle').textContent=`实例配置 · ${curr.name}`;$('#nameField').value=curr.name;$('#uidField').value=curr.uid;$('#formStatus').textContent=curr.uid?'配置完整 · '+(curr.enabled?'已启用':'已停用'):'缺少必填 UID';$('#layout').innerHTML=data.filter(x=>x.added).map(x=>`<div class="widget"><div class="w-label">${escapeHTML(x.name)}</div><div class="w-state">${x.enabled ? x.live ? '● 直播中' : '— 未开播' : '— 已停用'}</div><div class="w-detail">直播状态 · 独立实例</div></div>`).join('')||'<div class="empty">从下方组件库添加实例卡片</div>';$('#componentLibrary').innerHTML=data.map(x=>`<div class="librow"><span>${escapeHTML(x.name)}　<small class="muted">直播状态</small></span><button class="btn soft" data-add-card="${x.id}">${x.added?'已添加':'＋ 添加组件'}</button></div>`).join('');document.querySelectorAll('.instance').forEach(e=>e.addEventListener('click',ev=>{if(ev.target.closest('[data-toggle]'))return;selected=+e.dataset.id;render()}));document.querySelectorAll('[data-toggle]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const x=data.find(i=>i.id===+b.dataset.toggle);if(!x.uid){selected=x.id;render();toast('先填写必填 UID');return}x.enabled=!x.enabled;render()}));document.querySelectorAll('[data-add-card]').forEach(b=>b.addEventListener('click',()=>{const x=data.find(i=>i.id===+b.dataset.addCard);x.added=!x.added;render()}))}render();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active',x.id===b.dataset.tab))}));$('#addInstance').addEventListener('click',()=>{const id=Math.max(...data.map(x=>x.id))+1;data.push({id,name:`实例 ${id}`,uid:'',enabled:false,added:false});selected=id;render();toast('新实例已创建，请填写参数')});$('#save').addEventListener('click',()=>{const x=data.find(i=>i.id===selected);x.name=$('#nameField').value.trim()||`实例 ${x.id}`;x.uid=$('#uidField').value.trim();render();toast('实例配置已保存')});$('#copy').addEventListener('click',async()=>{const text=$('#snippet').textContent;try{await navigator.clipboard.writeText(text);toast('脚本示例已复制')}catch{toast('浏览器未开放剪贴板权限')}});
+</script>
+</body>
+</html>

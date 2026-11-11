@@ -1,27 +1,24 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useEffect, useState } from 'react'
-import type { Snapshot } from './layout'
+import type { ScreenConnection } from './Screen'
 
 export type DisplayTransport = 'usb' | 'ble' | 'wifi'
+export const displayTransportLabels: Record<DisplayTransport, string> = { usb: 'USB', ble: '蓝牙', wifi: 'Wi-Fi' }
 export type WifiDisplay = { id: string; name: string; address: string | null }
-type DevicePower = { source: 'external' | 'battery' | 'unknown'; batteryPercent: number | null; charging?: boolean }
 export type DisplayConnectionStatus = {
   phase: 'waiting' | 'syncing' | 'connected' | 'disconnected' | 'failed'
   transport?: DisplayTransport
   deviceId?: string
   wifiProvisioning?: boolean
-  port?: string
-  activePageId?: string
+  port?: string | null
   brightness?: number
   screenRotated?: boolean | null
-  firmwareVersion?: string
-  lastReadingsAppliedAtUnixMs?: number
-  reason?: string
-  hasLayout?: boolean
+  reason?: string | null
   reconnecting?: boolean
-  preview?: Snapshot
-  power?: DevicePower
+  hasLayout?: boolean
+  lastReadingsAppliedAtUnixMs?: number | null
+  power?: { source: 'external' | 'battery' | 'unknown'; batteryPercent: number | null; charging?: boolean } | null
 }
 
 export function useDisplayConnection() {
@@ -45,16 +42,18 @@ export function useDisplayConnection() {
       void events.then(stop => stop()).catch(() => {})
     }
   }, [])
-  const connection = status && {
-    phase: status.phase, transport: status.transport,
-    firmwareVersion: status.firmwareVersion, lastReadingsAt: status.lastReadingsAppliedAtUnixMs == null ? null : status.lastReadingsAppliedAtUnixMs / 1000,
-    reason: status.reason, hasLayout: status.hasLayout,
-    power: (status.power?.source === 'battery' || status.power?.charging === true)
-      ? { source: 'battery' as const, percent: status.power.batteryPercent, charging: status.power.charging }
-      : { source: status.power?.source === 'external' ? 'external' as const : 'unknown' as const },
+  const power = status?.power
+  const screenConnection: ScreenConnection = {
+    phase: status?.phase ?? 'waiting',
+    transport: status?.transport,
+    hasLayout: status?.hasLayout,
+    lastReadingsAt: status?.lastReadingsAppliedAtUnixMs == null ? null : status.lastReadingsAppliedAtUnixMs / 1000,
+    power: power?.source === 'battery' || power?.charging
+      ? { source: 'battery', percent: power.batteryPercent, charging: power.charging }
+      : { source: power?.source === 'external' ? 'external' : 'unknown' },
   }
   return {
-    status, connection, ports, refreshPorts,
+    status, screenConnection, ports, refreshPorts,
     connectUsb: (port: string, intervalMs = 1000) => invoke<void>('connect_usb_display', {
       port, intervalMs, utcOffsetMinutes: -new Date().getTimezoneOffset(),
     }),
@@ -70,7 +69,6 @@ export function useDisplayConnection() {
     }),
     scanBle: () => invoke<{ id: string; name: string }[]>('scan_ble_displays'),
     disconnect: () => invoke<void>('disconnect_display'),
-    selectPage: (pageId: string) => invoke<void>('select_display_page', { pageId }),
     setBrightness: (percent: number) => invoke<void>('set_display_brightness', { percent }),
     setRotation: (rotated: boolean) => invoke<void>('set_display_rotation', { rotated }),
   }

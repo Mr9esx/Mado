@@ -362,14 +362,19 @@ pub struct ModuleSummary {
     actions: Vec<String>,
     action_instance: Option<String>,
     active_action: Option<String>,
+    allows_multiple_instances: bool,
     variable_instances: Vec<VariableInstance>,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct VariableInstance {
     id: String,
     name: String,
     enabled: bool,
+    updated_at: Option<u64>,
+    error: Option<String>,
+    active_action: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -458,25 +463,40 @@ impl Workspace {
                     previous: None,
                 },
             );
-            let instance = catalog
+            if !catalog
                 .instances
-                .entry(id.clone())
-                .or_insert_with(|| Instance {
-                    id: id.clone(),
-                    module_id: id.clone(),
-                    name: definition.name.clone(),
-                    settings: BTreeMap::new(),
-                    approved_permissions: definition.permissions.iter()
-                        .filter(|(_, permission)| !matches!(permission, Permission::Notification { .. }))
-                        .map(|(alias, permission)| (alias.clone(), permission.clone()))
-                        .collect(),
-                    refresh_seconds: schedule.refresh_seconds,
-                    enabled: schedule.enabled,
-                });
-            instance.refresh_seconds = schedule.refresh_seconds;
-            // Bundled paths stay as previously authorized. Updated grants require explicit reconfiguration.
-            if instance.approved_permissions != definition.permissions {
-                instance.enabled = false;
+                .values()
+                .any(|instance| &instance.module_id == id)
+            {
+                catalog.instances.insert(
+                    id.clone(),
+                    Instance {
+                        id: id.clone(),
+                        module_id: id.clone(),
+                        name: definition.name.clone(),
+                        settings: BTreeMap::new(),
+                        approved_permissions: definition
+                            .permissions
+                            .iter()
+                            .filter(|(_, permission)| {
+                                !matches!(permission, Permission::Notification { .. })
+                            })
+                            .map(|(alias, permission)| (alias.clone(), permission.clone()))
+                            .collect(),
+                        refresh_seconds: schedule.refresh_seconds,
+                        enabled: schedule.enabled,
+                    },
+                );
+            }
+            for instance in catalog
+                .instances
+                .values_mut()
+                .filter(|instance| &instance.module_id == id)
+            {
+                instance.refresh_seconds = schedule.refresh_seconds;
+                if instance.approved_permissions != definition.permissions {
+                    instance.enabled = false;
+                }
             }
         }
         Ok(Self {
@@ -593,30 +613,136 @@ impl Workspace {
         approval: Option<Approval>,
     ) -> Result<String, String> {
         let (instance, definition) = self.variable_target(id)?;
-        if !definition.settings.values().any(Setting::is_variable) {
+        if !definition.allows_multiple_instances()
+            && !definition.settings.values().any(Setting::is_variable)
+        {
             return Err("此采集器没有可配置变量。".into());
         }
         let mut next = instance.clone();
         if enabled {
             definition.validate_required_variables(&next.settings)?;
             io::settings(definition, &next.settings)?;
-            if definition.permissions != next.approved_permissions {
-                let project = builtin::get(&instance.module_id)
-                    .or_else(|| self.catalog.modules.get(&instance.module_id)
-                        .and_then(|module| module.released.as_ref()).map(|release| &release.project))
-                    .ok_or("找不到已发布采集器。")?;
-                let current = self.catalog.modules.get(&instance.module_id)
-                    .and_then(|module| module.released.as_ref()).map(|release| &release.project);
-                let planned = plan_sources(project, current, &self.catalog, false)?;
-                next = planned.authorize(project, approval)?
-                    .into_iter().find(|source| source.id == id)
-                    .ok_or("找不到采集实例。")?;
-                definition.validate_required_variables(&next.settings)?;
-                io::settings(definition, &next.settings)?;
-            }
+            let project = self.released_project(&instance.module_id)?;
+            let planned = plan_sources_for(
+                project,
+                Some(project),
+                &self.catalog,
+                false,
+                Some(&instance.id),
+            )?;
+            next = planned
+                .authorize(project, approval)?
+                .into_iter()
+                .next()
+                .ok_or("找不到采集实例。")?;
+            definition.validate_required_variables(&next.settings)?;
+            io::settings(definition, &next.settings)?;
         }
         next.enabled = enabled;
         self.save_variable_instance(next)
+    }
+
+    fn released_project(&self, module_id: &str) -> Result<&Project, String> {
+        self.catalog
+            .modules
+            .get(module_id)
+            .and_then(|module| module.released.as_ref())
+            .map(|release| &release.project)
+            .ok_or_else(|| "找不到已发布采集器。".into())
+    }
+
+    fn manage_instance(
+        &mut self,
+        device: &mut Device,
+        module_id: &str,
+        change: InstanceChange,
+    ) -> Result<String, String> {
+        let project = self.released_project(module_id)?;
+        let definition = &project.manifest.definition;
+        if !definition.allows_multiple_instances() {
+            return Err("此采集器只支持单实例。".into());
+        }
+        let mut catalog = self.catalog.clone();
+        let siblings = || {
+            self.catalog
+                .instances
+                .values()
+                .filter(|item| item.module_id == module_id)
+        };
+        let mut staged = device.clone();
+        let (id, removed) = match change {
+            InstanceChange::Create => {
+                if catalog.instances.len() >= MAX_INSTANCES {
+                    return Err("已达到数据源上限。".into());
+                }
+                let name = (1..=MAX_INSTANCES)
+                    .map(|number| format!("实例 {number}"))
+                    .find(|name| !siblings().any(|item| &item.name == name))
+                    .ok_or("已达到数据源上限。")?;
+                let id = format!("collector:{}", uuid::Uuid::new_v4());
+                staged.install_widgets(&id, project.widgets(&id, &name))?;
+                catalog.instances.insert(
+                    id.clone(),
+                    Instance {
+                        id: id.clone(),
+                        module_id: module_id.into(),
+                        name,
+                        settings: BTreeMap::new(),
+                        approved_permissions: BTreeMap::new(),
+                        enabled: false,
+                        refresh_seconds: definition
+                            .schedule
+                            .as_ref()
+                            .expect("instance schedule")
+                            .refresh_seconds,
+                    },
+                );
+                (id, false)
+            }
+            InstanceChange::Rename { id, name } => {
+                let name = name.trim();
+                if name.is_empty()
+                    || name.chars().count() > 24
+                    || name.chars().any(char::is_control)
+                {
+                    return Err("实例名称须为 1–24 个字符。".into());
+                }
+                if siblings().any(|item| item.id != id && item.name == name) {
+                    return Err("同一采集器下的实例名称不能重复。".into());
+                }
+                let item = catalog
+                    .instances
+                    .get_mut(&id)
+                    .filter(|item| item.module_id == module_id)
+                    .ok_or("找不到采集实例。")?;
+                item.name = name.into();
+                staged.install_widgets(&id, project.widgets(&id, name))?;
+                (id, false)
+            }
+            InstanceChange::Delete { id } => {
+                if !siblings().any(|item| item.id == id) {
+                    return Err("找不到采集实例。".into());
+                }
+                if siblings().count() == 1 {
+                    return Err("请至少保留一个采集实例。".into());
+                }
+                staged.install_widgets(&id, Vec::new())?;
+                staged.update_source_values(&id, BTreeMap::new());
+                catalog.instances.remove(&id);
+                (id, true)
+            }
+        };
+        self.save(catalog)?;
+        *device = staged;
+        if removed {
+            self.status.remove(&id);
+            self.refresh.remove(&id);
+            if let Some(interaction) = self.interactions.remove(&id) {
+                interaction.cancelled.store(true, Ordering::Relaxed);
+            }
+        }
+        self.sequence += 1;
+        Ok(id)
     }
 
     fn save_variable_instance(&mut self, instance: Instance) -> Result<String, String> {
@@ -718,12 +844,31 @@ impl Workspace {
                         .values()
                         .any(Setting::is_variable)
                 });
-                let variable_instances = if has_variables {
+                let allows_multiple_instances = module.released.as_ref().is_some_and(|release| {
+                    release
+                        .project
+                        .manifest
+                        .definition
+                        .allows_multiple_instances()
+                });
+                let variable_instances = if has_variables || allows_multiple_instances {
                     instances
                         .map(|instance| VariableInstance {
                             id: instance.id.clone(),
                             name: instance.name.clone(),
                             enabled: instance.enabled,
+                            updated_at: self
+                                .status
+                                .get(&instance.id)
+                                .and_then(|status| status.updated_at),
+                            error: self
+                                .status
+                                .get(&instance.id)
+                                .and_then(|status| status.error.clone()),
+                            active_action: self
+                                .interactions
+                                .get(&instance.id)
+                                .map(|action| action.name.clone()),
                         })
                         .collect()
                 } else {
@@ -760,6 +905,7 @@ impl Workspace {
                         .as_ref()
                         .and_then(|id| self.interactions.get(id).map(|action| action.name.clone())),
                     action_instance,
+                    allows_multiple_instances,
                     variable_instances,
                 }
             })
@@ -1033,6 +1179,12 @@ pub fn start(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     {
         let device = app.state::<Mutex<Device>>();
         let mut device = device.lock().map_err(|error| error.to_string())?;
+        for project in builtin::projects() {
+            let id = &project.manifest.module_id;
+            if !workspace.catalog.instances.contains_key(id) {
+                device.install_widgets(id, Vec::new())?;
+            }
+        }
         for instance in workspace.catalog.instances.values() {
             if let Some(release) = workspace
                 .catalog
@@ -1157,6 +1309,57 @@ pub fn set_collector_enabled(
     })
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum InstanceChange {
+    Create,
+    Rename { id: String, name: String },
+    Delete { id: String },
+}
+
+#[tauri::command]
+pub fn manage_collector_instance(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    module_id: String,
+    change: InstanceChange,
+) -> Result<String, String> {
+    command_window(&window)?;
+    let state = app.state::<Mutex<Workspace>>();
+    let mut workspace = state.lock().map_err(|error| error.to_string())?;
+    let device_state = app.state::<Mutex<Device>>();
+    let mut device = device_state.lock().map_err(|error| error.to_string())?;
+    let id = workspace.manage_instance(&mut device, &module_id, change)?;
+    let snapshot = device.snapshot();
+    drop(device);
+    drop(workspace);
+    let _ = app.emit(
+        SNAPSHOT_EVENT,
+        crate::display_wire::local_snapshot(&snapshot),
+    );
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn collector_instance_grants(
+    window: tauri::WebviewWindow,
+    state: State<'_, Mutex<Workspace>>,
+    id: String,
+) -> Result<Vec<GrantRequest>, String> {
+    command_window(&window)?;
+    let workspace = state.lock().map_err(|error| error.to_string())?;
+    let (instance, _) = workspace.variable_target(&id)?;
+    let project = workspace.released_project(&instance.module_id)?;
+    Ok(plan_sources_for(
+        project,
+        Some(project),
+        &workspace.catalog,
+        false,
+        Some(&instance.id),
+    )?
+    .requests)
+}
+
 #[tauri::command]
 pub fn collector_draft(
     window: tauri::WebviewWindow,
@@ -1270,16 +1473,38 @@ fn plan_sources(
     catalog: &Catalog,
     live: bool,
 ) -> Result<PlannedSources, String> {
+    plan_sources_for(project, current, catalog, live, None)
+}
+
+fn plan_sources_for(
+    project: &Project,
+    current: Option<&Project>,
+    catalog: &Catalog,
+    live: bool,
+    only_instance: Option<&str>,
+) -> Result<PlannedSources, String> {
     let id = &project.manifest.module_id;
     let definition = project.manifest.definition.clone();
     let current = current.map(|project| project.manifest.definition.clone());
     let mut sources: Vec<_> = catalog
         .instances
         .values()
-        .filter(|source| source.module_id == *id)
+        .filter(|source| source.module_id == *id && only_instance.is_none_or(|id| source.id == id))
         .cloned()
         .collect();
     let existing = !sources.is_empty();
+    let targeting_instance = only_instance.is_some();
+    if !existing && only_instance.is_some() {
+        return Err("找不到采集实例。".into());
+    }
+    if sources.len() > 1
+        && !definition.allows_multiple_instances()
+        && current
+            .as_ref()
+            .is_some_and(Definition::allows_multiple_instances)
+    {
+        return Err("请先将采集实例减少到一个，再切换到单实例模式。".into());
+    }
     if !existing {
         sources.push(Instance {
             id: format!("collector:{id}"),
@@ -1310,11 +1535,16 @@ fn plan_sources(
         for source in &mut sources {
             let previous_settings = std::mem::take(&mut source.settings);
             if let Some(schedule) = &definition.schedule {
-                if !multiple {
+                if !multiple
+                    && !targeting_instance
+                    && !(existing && definition.allows_multiple_instances())
+                {
                     source.name = definition.name.clone();
                 }
                 source.refresh_seconds = schedule.refresh_seconds;
-                source.enabled = schedule.enabled;
+                if !targeting_instance && !(existing && definition.allows_multiple_instances()) {
+                    source.enabled = schedule.enabled;
+                }
             }
             if let Some(previous) = &current {
                 source.settings.extend(
@@ -1380,7 +1610,7 @@ fn plan_sources(
                 };
                 let mut changed = !existing
                     || !approved
-                    || (!matches!(kind, "system" | "browser")
+                    || (!matches!(kind, "system" | "browser" | "notification")
                         && (target.is_none() || target.as_ref() != saved));
                 if io::is_path_resource(kind) && (live || source.enabled || changed) {
                     if let Some(path) = declared.or(target.as_ref()) {
@@ -1508,6 +1738,7 @@ pub async fn collector_grants(
     target: Draft,
     restore: bool,
     live: bool,
+    instance_id: Option<String>,
 ) -> Result<Vec<GrantRequest>, String> {
     command_window(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1539,11 +1770,12 @@ pub async fn collector_grants(
             .modules
             .get(&id)
             .and_then(|module| module.released.as_ref());
-        Ok(plan_sources(
+        Ok(plan_sources_for(
             &project,
             current.map(|release| &release.project),
             &state.catalog,
             live,
+            instance_id.as_deref().filter(|_| live),
         )?
         .requests)
     })
@@ -1557,6 +1789,7 @@ pub async fn test_collector(
     app: AppHandle,
     target: Draft,
     live: bool,
+    instance_id: Option<String>,
     approval: Option<Approval>,
 ) -> Result<runner::ResultData, String> {
     command_window(&window)?;
@@ -1581,11 +1814,12 @@ pub async fn test_collector(
                     .modules
                     .get(&id)
                     .and_then(|module| module.released.as_ref());
-                plan_sources(
+                plan_sources_for(
                     &project,
                     current.map(|release| &release.project),
                     &state.catalog,
                     true,
+                    instance_id.as_deref(),
                 )?
             };
             let instances = planned.authorize(&project, approval)?;
@@ -1593,9 +1827,24 @@ pub async fn test_collector(
         } else if project.manifest.sdk_api_version == 2 {
             let (settings, mut broker) =
                 io::Broker::fixture(&project.manifest.definition, &project.fixture)?;
-            runner::isolated_with(request(&project, settings, now()), move |call| {
-                broker.call(call)
-            })?
+            if project.manifest.definition.collects_in_batch() {
+                let run = runner::isolated_batch(
+                    request(&project, json!([{"id":"fixture","name":"样例实例","settings":settings,"state":null}]), now()),
+                    move |id, call| {
+                        if id != "fixture" { return Err("找不到样例实例。".into()); }
+                        broker.call(call)
+                    },
+                )?;
+                let result = run.results.and_then(|mut results| {
+                    results.remove("fixture").ok_or("找不到样例实例。")?
+                });
+                match result {
+                    Ok(result) => runner::ResultData { result: Some(result), error: None, logs: run.logs, definition: None },
+                    Err(error) => runner::ResultData { result: None, error: Some(error), logs: run.logs, definition: None },
+                }
+            } else {
+                runner::isolated_with(request(&project, settings, now()), move |call| broker.call(call))?
+            }
         } else {
             if project
                 .manifest
@@ -1947,6 +2196,58 @@ fn collect_instance(
     Ok((at, result))
 }
 
+fn collect_batch(
+    project: &Project,
+    instances: &[(Instance, Value, Option<Interaction>)],
+    client: &reqwest::blocking::Client,
+    at: u64,
+) -> runner::BatchResults {
+    let definition = &project.manifest.definition;
+    let mut results = BTreeMap::new();
+    let mut inputs = Vec::new();
+    let mut brokers = BTreeMap::new();
+    for (instance, state, _) in instances {
+        if instance.approved_permissions != definition.permissions {
+            results.insert(
+                instance.id.clone(),
+                Err("请重新确认采集实例的资源授权。".into()),
+            );
+            continue;
+        }
+        match definition
+            .validate_required_variables(&instance.settings)
+            .and_then(|()| io::settings(definition, &instance.settings))
+        {
+            Ok(settings) => {
+                inputs.push(json!({ "id": instance.id, "name": instance.name, "settings": settings, "state": state }));
+                brokers.insert(
+                    instance.id.clone(),
+                    io::Broker::live(definition, instance.settings.clone(), client.clone()),
+                );
+            }
+            Err(error) => {
+                results.insert(instance.id.clone(), Err(error));
+            }
+        }
+    }
+    if inputs.is_empty() {
+        return results;
+    }
+    let ids = brokers.keys().cloned().collect::<Vec<_>>();
+    let collected = runner::isolated_batch(request(project, json!(inputs), at), move |id, call| {
+        brokers
+            .get_mut(&id)
+            .ok_or("找不到已授权的采集实例。")?
+            .call(call)
+    })
+    .and_then(|run| run.results);
+    match collected {
+        Ok(items) => results.extend(items),
+        Err(error) => results.extend(ids.into_iter().map(|id| (id, Err(error.clone())))),
+    }
+    results
+}
+
 pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
     let mut arguments = arguments.into_iter();
     let path = arguments.next().ok_or(
@@ -2036,15 +2337,17 @@ fn poll_sources(app: AppHandle) {
     let Ok(client) = http_client() else { return };
     let state = app.state::<Mutex<Workspace>>();
     let mut tasks = BTreeMap::<String, Schedule>::new();
-    let (sender, receiver) = std::sync::mpsc::channel::<Finished>();
+    let (sender, receiver) = std::sync::mpsc::channel::<Vec<Finished>>();
     let mut active = 0;
     let mut sequence = 0;
     loop {
         let Ok(mut workspace) = state.lock() else {
             return;
         };
-        for finished in receiver.try_iter() {
+        for finished in receiver.try_iter().flat_map(|batch: Vec<Finished>| {
             active -= 1;
+            batch
+        }) {
             let cancelled = finished
                 .interaction
                 .as_ref()
@@ -2072,7 +2375,13 @@ fn poll_sources(app: AppHandle) {
                 continue;
             }
             let instance = &finished.instance;
-            if workspace.catalog.instances.get(&instance.id) != Some(instance) {
+            if workspace.refresh.contains(&instance.id)
+                || workspace
+                    .catalog
+                    .instances
+                    .get(&instance.id)
+                    .is_none_or(|current| !same_collection(current, instance))
+            {
                 continue;
             }
             let Some(release) = workspace
@@ -2155,15 +2464,13 @@ fn poll_sources(app: AppHandle) {
                 }
             }
         }
+        let mut ready = Vec::new();
         for instance in workspace
             .catalog
             .instances
             .values()
             .filter(|instance| instance.enabled)
         {
-            if active >= 3 {
-                break;
-            }
             let Some(release) = workspace
                 .catalog
                 .modules
@@ -2172,9 +2479,9 @@ fn poll_sources(app: AppHandle) {
             else {
                 continue;
             };
-            let reset = tasks
-                .get(&instance.id)
-                .is_none_or(|task| task.instance != *instance || task.revision != release.revision);
+            let reset = tasks.get(&instance.id).is_none_or(|task| {
+                !same_collection(&task.instance, instance) || task.revision != release.revision
+            });
             if reset {
                 refresh_pending.remove(&instance.id);
                 tasks.insert(
@@ -2191,38 +2498,107 @@ fn poll_sources(app: AppHandle) {
             }
             let task = tasks.get_mut(&instance.id).expect("scheduled instance");
             let interaction = workspace.interactions.get(&instance.id).cloned();
-            if task.run.is_none() && (task.next_run <= Instant::now() || interaction.is_some()) {
-                let instance = instance.clone();
-                let release = release.clone();
-                let sender = sender.clone();
-                let client = client.clone();
-                let state = task.state.clone();
-                sequence += 1;
-                let run = sequence;
-                task.run = Some(run);
-                active += 1;
-                thread::spawn(move || {
-                    let result = collect_instance(
-                        &release.project,
-                        &instance,
-                        &client,
-                        state,
-                        interaction.clone(),
-                    );
-                    let _ = sender.send(Finished {
-                        run,
-                        instance,
-                        revision: release.revision,
-                        result,
-                        interaction,
-                    });
+            if task.run.is_none() {
+                ready.push((
+                    interaction.is_none(),
+                    task.next_run,
+                    instance,
+                    release,
+                    interaction,
+                ));
+            }
+        }
+        ready.sort_by_key(|(scheduled, due, ..)| (*scheduled, *due));
+        while active < 3 && !ready.is_empty() {
+            let (_, due, instance, release, interaction) = ready.remove(0);
+            if interaction.is_none() && due > Instant::now() {
+                break;
+            }
+            let batch =
+                interaction.is_none() && release.project.manifest.definition.collects_in_batch();
+            let mut group = vec![(instance, interaction)];
+            if batch {
+                if tasks
+                    .values()
+                    .any(|task| task.run.is_some() && task.instance.module_id == instance.module_id)
+                {
+                    continue;
+                }
+                ready.retain(|(_, _, candidate, _, action)| {
+                    if action.is_none() && candidate.module_id == instance.module_id {
+                        group.push((*candidate, None));
+                        false
+                    } else {
+                        true
+                    }
                 });
             }
+            sequence += 1;
+            let run = sequence;
+            let group = group
+                .into_iter()
+                .map(|(instance, interaction)| {
+                    let task = tasks.get_mut(&instance.id).expect("scheduled instance");
+                    task.run = Some(run);
+                    (instance.clone(), task.state.clone(), interaction)
+                })
+                .collect::<Vec<_>>();
+            let release = release.clone();
+            let sender = sender.clone();
+            let client = client.clone();
+            active += 1;
+            thread::spawn(move || {
+                let at = now();
+                let mut results = if batch {
+                    collect_batch(&release.project, &group, &client, at)
+                } else {
+                    BTreeMap::new()
+                };
+                let finished = group
+                    .into_iter()
+                    .map(|(instance, state, interaction)| {
+                        let result = if batch {
+                            results
+                                .remove(&instance.id)
+                                .unwrap_or_else(|| Err("批量采集未返回此实例的结果。".into()))
+                                .and_then(|result| {
+                                    release.project.validate_outputs(&result)?;
+                                    Ok((at, result))
+                                })
+                        } else {
+                            collect_instance(
+                                &release.project,
+                                &instance,
+                                &client,
+                                state,
+                                interaction.clone(),
+                            )
+                        };
+                        Finished {
+                            run,
+                            instance,
+                            revision: release.revision,
+                            result,
+                            interaction,
+                        }
+                    })
+                    .collect();
+                let _ = sender.send(finished);
+            });
         }
         workspace.refresh.extend(refresh_pending);
         drop(workspace);
         thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn same_collection(a: &Instance, b: &Instance) -> bool {
+    a.id == b.id
+        && a.module_id == b.module_id
+        && a.settings == b.settings
+        && a.approved_permissions == b.approved_permissions
+        && a.refresh_seconds == b.refresh_seconds
+        && a.enabled == b.enabled
 }
 
 #[cfg(test)]
@@ -2272,6 +2648,50 @@ mod tests {
 
     const VARIABLE_VALUE: &str = "不应出现在本机配置的变量";
     const VARIABLE_KEY: &str = "collector-variables.key";
+
+    #[test]
+    fn creating_an_instance_keeps_existing_configuration_and_card_ids() {
+        use crate::device::PowerStatus;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("collectors.json");
+        let mut workspace = Workspace::load(path.clone()).unwrap();
+        let mut device = Device::new(PowerStatus::External);
+        workspace
+            .configure_variables(
+                "bilibili",
+                BTreeMap::from([("BILIBILI_UID".into(), "998877".into())]),
+            )
+            .unwrap();
+        let id = workspace
+            .manage_instance(&mut device, "bilibili", InstanceChange::Create)
+            .unwrap();
+        assert!(!workspace.catalog.instances[&id].enabled);
+        assert!(workspace.catalog.instances[&id].settings.is_empty());
+        workspace
+            .manage_instance(
+                &mut device,
+                "bilibili",
+                InstanceChange::Rename {
+                    id: id.clone(),
+                    name: "夜间直播".into(),
+                },
+            )
+            .unwrap();
+        let widgets = serde_json::to_value(device.snapshot()).unwrap();
+        let widgets = widgets["widgets"].as_array().unwrap();
+        let old_id = "bilibili.live-status";
+        let new_id = format!("{id}.live-status");
+        assert!(widgets.iter().any(|widget| widget["id"] == old_id));
+        assert!(widgets
+            .iter()
+            .any(|widget| widget["id"] == new_id && widget["name"] == "夜间直播"));
+        let reopened = Workspace::load(path).unwrap();
+        assert_eq!(
+            reopened.catalog.instances["bilibili"].settings["BILIBILI_UID"],
+            "998877"
+        );
+        assert_eq!(reopened.catalog.instances[&id].name, "夜间直播");
+    }
 
     fn variable_catalog() -> (Catalog, String) {
         let mut project = create_template("变量".into(), "sample")

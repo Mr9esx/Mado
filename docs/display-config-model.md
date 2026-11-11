@@ -103,11 +103,11 @@ SDK v1 的 `inputs` 保留兼容。Studio 按已有绑定或本次授权预读�
 | API | 行为 |
 | --- | --- |
 | `defineModule({ …, collect })` | 从 `@mado/sdk` 导入，作为入口脚本的默认导出。名称、参数、授权、输出和采集函数在同一个对象中定义。 |
-| `collect(settings, context)` | 每次试跑或正式采集时调用。脚本自行发起 I/O，返回 `{ outputs, notifications?, desktopNotifications? }` 或相应的 Promise。 |
+| `collect(settings, context)` | 单实例采集和实际资源试跑使用此入口。脚本自行发起 I/O，返回 `{ outputs, notifications?, desktopNotifications? }` 或相应的 Promise。 |
 | `context.sampledAtUnixMs` | Studio 为本次采集分配的时间戳。该批输出使用同一时间戳。 |
 | `context.log(message)` | 写入本次执行的有限长度调试日志。日志只显示在 Studio。 |
 
-`outputs` 必须覆盖清单声明的全部输出键，缺值用 `null`。Studio 校验整批数据后提交，校验失败时整批丢弃，并在实例状态中记录失败原因。每路 `OutputSample` 保存 `sourceInstanceId`、`outputKey`、`sampledAtUnixMs` 和 `value`。采集失败时，最近成功值可保留到有效期结束。定时实例默认有效期为三个刷新周期。暂停采集或读数过期后，该实例的卡片显示空态。历史样本由 Studio 按所需图表窗口和趋势周期保留。
+`outputs` 必须覆盖清单声明的全部输出键，缺值用 `null`。Studio 按实例校验并提交读数，在对应的实例状态中记录失败原因。每路 `OutputSample` 保存 `sourceInstanceId`、`outputKey`、`sampledAtUnixMs` 和 `value`。采集失败时，最近成功值可保留到有效期结束。定时实例默认有效期为三个刷新周期。暂停采集或读数过期后，该实例的卡片显示空态。历史样本由 Studio 按所需图表窗口和趋势周期保留。
 
 `notifications` 是本次请求屏幕卡片提醒的状态输出键列表。每个键必须对应本批非空的 `state` 输出。提醒请求独立于可缓存的样本，Studio 只将它投递到本次更新中绑定该输出且允许提醒的卡片。
 
@@ -177,6 +177,38 @@ export default defineModule({
 每次定时采集最多 24 次 SDK I/O 调用，执行时长和单次结果大小均受限。主动授权启动的程序以当前用户权限运行。脚本可以返回 `state`，由调度器在下一次同实例采集通过 `context.state` 传回。插件用它维护采样缓存，实例或发布版本变化时重置，应用重启后重新采集。可选的 `status` 用于展示插件业务状态。
 
 「测试运行」默认离线。样例数据用 `settings` 提供试跑变量，用 `calls` 提供 `{ operation, alias, params, result }`。样例按实际调用的操作、别名和参数匹配。同一个调用重复出现时，依次消耗对应的样例响应。`operation` 可为 `http`、`readText`、`list`、`findFiles`、`readWindow`、`run`、`rpc`、`notify`、`receive`、`openUrl` 或 `system`。「用实际资源试跑」打开授权表单，本次测试和定时采集走同一套检查。
+
+### 多实例与批量采集
+
+SDK v2 的定时模块可以声明 `instances: { mode: "multiple" }`，让用户创建多份配置。每份配置都由 `settings` 生成表单，并分别保存授权、读数和脚本状态。同一个组件定义会为每个实例生成独立的组件 ID，原有实例的组件 ID 继续有效。
+
+在实例策略中加入 `batch: true` 后，Studio 会在模块到期时把可运行的实例放进同一数组，调用 `collectBatch(instances, context)`。保留 `collect` 供实际资源试跑、命令行和现有单实例调用使用。下面的例子假设已声明 `REGION` 参数、`latency` 数字输出和 `metrics` HTTP 权限。
+
+```js
+async function collect(settings, context) {
+  const region = encodeURIComponent(settings.REGION)
+  const result = await context.http.getJson('metrics', '/latency?region=' + region)
+  return { outputs: { latency: { value: result.p95Ms } } }
+}
+
+async function collectBatch(instances, context) {
+  const results = []
+  for (const { id, settings, state } of instances) {
+    try {
+      const scope = context.forInstance(id)
+      const result = await collect(settings, { ...scope, state })
+      results.push({ instanceId: id, ...result })
+    } catch (error) {
+      results.push({ instanceId: id, error: error.message })
+    }
+  }
+  return { results }
+}
+```
+
+入口通过 `defineModule({ …, instances: { mode: 'multiple', batch: true }, collect, collectBatch })` 导出。每个输入含 `id`、`name`、`settings`、`state`，通过 `context.forInstance(id)` 取得该实例已授权的 I/O。每个结果用 `instanceId` 回传正常采集结果，或用 `{ instanceId, error }` 报告失败。缺少、重复或无效结果会记录在对应实例下，其他有效结果继续更新。未捕获的脚本错误会使本轮批次失败。返回的 `state` 和两类通知仍按实例处理。
+
+批次共享 24 次宿主调用和 12 秒运行上限。脚本可在接口与授权范围允许时合并查询。离线试跑会把样例配置作为单条实例输入交给 `collectBatch`，用于检查返回结构和权限调用。
 
 ## 插件操作与独立执行
 

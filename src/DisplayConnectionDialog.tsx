@@ -3,9 +3,7 @@ import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select'
-import { Screen } from './Screen'
-import { nextPageId, pagesFromSnapshot } from './pages'
-import type { DisplayTransport, WifiDisplay, useDisplayConnection } from './displayConnection'
+import { displayTransportLabels, type DisplayTransport, type WifiDisplay, type useDisplayConnection } from './displayConnection'
 
 export function DisplayConnectionDialog({ device, interval, onDismiss }: {
   device: ReturnType<typeof useDisplayConnection>; interval: number; onDismiss: () => void
@@ -22,7 +20,7 @@ export function DisplayConnectionDialog({ device, interval, onDismiss }: {
   const [port, setPort] = useState(device.status?.port ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const phase = device.connection?.phase ?? 'waiting'
+  const phase = device.status?.phase ?? 'waiting'
   const connected = phase === 'connected' || phase === 'syncing'
   const reconnecting = device.status?.reconnecting === true
   const transport = connected || reconnecting ? device.status?.transport ?? mode : mode
@@ -30,11 +28,6 @@ export function DisplayConnectionDialog({ device, interval, onDismiss }: {
   const wifi = wifiDevices.find(candidate => candidate.id === wifiId) ?? wifiDevices[0]
   const selected = device.ports.includes(port) ? port : device.ports[0] ?? ''
   const selectedBle = bleDevices.some(candidate => candidate.id === bleId) ? bleId : bleDevices[0]?.id ?? ''
-  const snapshot = device.status?.preview
-  const pages = pagesFromSnapshot(snapshot)
-  const pageId = device.status?.activePageId ?? pages[0].id
-  const page = pages.find(candidate => candidate.id === pageId) ?? pages[0]
-  const preview = snapshot?.appliedWidgets ? { ...snapshot, widgets: snapshot.appliedWidgets } : snapshot
 
   async function scanWifi() {
     const found = await device.scanWifi()
@@ -64,7 +57,7 @@ export function DisplayConnectionDialog({ device, interval, onDismiss }: {
     <DialogContent className="settings-dialog">
       <DialogHeader>
         <DialogTitle>设备连接</DialogTitle>
-        <DialogDescription>设备使用已应用布局，并按设定间隔接收全部页面的读数。</DialogDescription>
+        <DialogDescription>选择连接方式，连接要接收布局和读数的 Mado 屏幕。</DialogDescription>
       </DialogHeader>
       <div className="usb-settings">
         <fieldset disabled={busy}>
@@ -78,13 +71,11 @@ export function DisplayConnectionDialog({ device, interval, onDismiss }: {
             }}>
             <SelectTrigger size="sm" aria-label="连接方式"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="usb">USB</SelectItem>
-              <SelectItem value="ble">蓝牙</SelectItem>
-              <SelectItem value="wifi">Wi-Fi</SelectItem>
+              {Object.entries(displayTransportLabels).map(([id, label]) => <SelectItem key={id} value={id}>{label}</SelectItem>)}
             </SelectContent>
           </Select>
           {transport === 'ble' && !connected && !reconnecting &&
-            <p className="usb-preview-label">首次连接时，在设备上长按 BOOT，打开「蓝牙配对」。</p>}
+            <p className="device-connection-hint">首次连接时，在设备上长按 BOOT，打开「蓝牙配对」。</p>}
           <div className="usb-port">
             {transport === 'usb' ? <>
               <Select value={selected} disabled={connected || reconnecting || !device.ports.length} onValueChange={setPort}>
@@ -128,14 +119,14 @@ export function DisplayConnectionDialog({ device, interval, onDismiss }: {
               inputMode="decimal" value={address} onChange={event => setAddress(event.target.value)} />}
           {canConfigureWifi && <div>
             <Button variant="outline" size="sm" onClick={() => { setSetup(!setup); setPassword(''); setError('') }}>
-              {setup ? '返回设备预览' : '配置 Wi-Fi'}
+              {setup ? '取消配网' : '配置 Wi-Fi'}
             </Button>
           </div>}
-          {transport === 'ble' && phase === 'syncing' && <p className="usb-preview-label" role="status">
+          {transport === 'ble' && phase === 'syncing' && <p className="device-connection-hint" role="status">
             正在连接。若系统询问配对码，请输入设备屏上显示的六位数字。
           </p>}
         </fieldset>
-        {setup && canConfigureWifi ? <form onSubmit={event => { event.preventDefault(); void perform(configureWifi) }}>
+        {setup && canConfigureWifi && <form onSubmit={event => { event.preventDefault(); void perform(configureWifi) }}>
           <fieldset disabled={busy}>
             <label className="grid gap-1 text-sm">
               Wi-Fi 网络名
@@ -151,18 +142,10 @@ export function DisplayConnectionDialog({ device, interval, onDismiss }: {
               <Button type="submit" size="sm" disabled={!ssid}>{busy ? '正在配网…' : '配置并连接'}</Button>
             </div>
           </fieldset>
-          {busy && <p className="usb-preview-label" role="status">正在等待设备加入网络。</p>}
-        </form> : <div>
-          <p className="usb-preview-label">设备页面 · 最近一次确认的读数</p>
-          <Screen layout={page.layout} pages={pages} pageId={page.id} snapshot={preview}
-            connection={device.connection ?? { phase: 'waiting', hasLayout: false }}
-            onPageChange={phase === 'connected' && pages.length > 1 ? () => {
-              const next = nextPageId(pages, page.id, 1)
-              if (next) void perform(() => device.selectPage(next))
-            } : undefined} />
-        </div>}
-        {(error || phase === 'failed') && <p className="page-error" role="alert">{error || device.connection?.reason}</p>}
-        {reconnecting && phase !== 'failed' && <p className="page-error" role="status">正在重连。{device.connection?.reason}</p>}
+          {busy && <p className="device-connection-hint" role="status">正在等待设备加入网络。</p>}
+        </form>}
+        {(error || phase === 'failed') && <p className="page-error" role="alert">{error || device.status?.reason}</p>}
+        {reconnecting && phase !== 'failed' && <p className="page-error" role="status">正在重连。{device.status?.reason}</p>}
       </div>
     </DialogContent>
   </Dialog>

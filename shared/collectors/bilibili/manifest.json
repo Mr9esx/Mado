@@ -3,6 +3,7 @@
   "name": "B 站直播",
   "sdkApiVersion": 2,
   "entry": "index.mjs",
+  "instances": { "mode": "multiple", "batch": true },
   "schedule": {
     "refreshSeconds": 30,
     "enabled": false

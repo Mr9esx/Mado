@@ -44,6 +44,8 @@ pub struct Definition {
     pub permissions: BTreeMap<String, Permission>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<CollectionSchedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instances: Option<InstancePolicy>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resources: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -55,6 +57,16 @@ pub struct Definition {
 }
 
 impl Definition {
+    pub fn allows_multiple_instances(&self) -> bool {
+        self.instances
+            .as_ref()
+            .is_some_and(|policy| policy.mode == InstanceMode::Multiple)
+    }
+
+    pub fn collects_in_batch(&self) -> bool {
+        self.instances.as_ref().is_some_and(|policy| policy.batch)
+    }
+
     pub fn validate_required_variables(
         &self,
         values: &BTreeMap<String, String>,
@@ -66,6 +78,21 @@ impl Definition {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstancePolicy {
+    pub mode: InstanceMode,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub batch: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InstanceMode {
+    Single,
+    Multiple,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -405,6 +432,12 @@ impl Project {
             1 | 2 => return Err("SDK v1 使用 inputs，SDK v2 使用 settings 和 permissions。".into()),
             _ => return Err("此模块的 SDK 版本不受支持。".into()),
         }
+        if (definition.instances.is_some() && manifest.sdk_api_version != 2)
+            || (definition.collects_in_batch() && !definition.allows_multiple_instances())
+            || (definition.allows_multiple_instances() && definition.schedule.is_none())
+        {
+            return Err("多实例需要 SDK v2 和采集间隔，批量采集需要多实例模式。".into());
+        }
         if definition
             .schedule
             .as_ref()
@@ -473,7 +506,12 @@ impl Project {
         if manifest.module_id.len() > 128 || !manifest.module_id.split('.').all(key_valid) {
             return Err("模块 ID 无效。".into());
         }
-        if !trusted && matches!(manifest.module_id.as_str(), "codex" | "system" | "github") {
+        if !trusted
+            && matches!(
+                manifest.module_id.as_str(),
+                "codex" | "system" | "github" | "bilibili"
+            )
+        {
             return Err("此 ID 由内置模块保留。".into());
         }
         if self.files.len() > MAX_FILES
@@ -723,18 +761,31 @@ impl Project {
 
     pub fn widgets(&self, source: &str, source_name: &str) -> Vec<Widget> {
         let definition = &self.manifest.definition;
+        let multiple = definition.allows_multiple_instances();
+        let name = |label: &str| {
+            if !multiple {
+                label.to_owned()
+            } else if definition.widgets.len() == 1 {
+                source_name.to_owned()
+            } else {
+                format!("{source_name} · {label}")
+            }
+        };
         definition
             .widgets
             .iter()
             .map(|(key, widget)| Widget {
                 id: self.widget_id(source, key),
                 group: source.into(),
-                group_name: source_name.into(),
-                name: widget.label.clone(),
-                short_name: widget
-                    .short_label
-                    .clone()
-                    .unwrap_or_else(|| widget.label.clone()),
+                group_name: if multiple {
+                    definition.name.clone()
+                } else {
+                    source_name.into()
+                },
+                module_id: multiple.then(|| self.manifest.module_id.clone()),
+                instance_name: multiple.then(|| source_name.into()),
+                name: name(&widget.label),
+                short_name: name(widget.short_label.as_deref().unwrap_or(&widget.label)),
                 unit: definition.outputs[&widget.output_key].unit.clone(),
                 sizes: widget
                     .supported_spans

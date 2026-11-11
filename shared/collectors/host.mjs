@@ -1,9 +1,9 @@
 // Capture the native bridge before loading any project code.
-(call => {
+((call, instanceId = null) => {
   const stringify = JSON.stringify
   const parse = JSON.parse
   const invoke = async (operation, alias, params) => {
-    const reply = parse(call(stringify({ operation, alias, params })))
+    const reply = parse(call(stringify({ operation, alias, params }), instanceId))
     if (reply.Err !== undefined) throw new Error(reply.Err)
     return reply.Ok
   }

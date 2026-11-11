@@ -120,7 +120,7 @@ button:not([data-slot="button"]):focus-visible { outline: 2px solid var(--ring);
   grid-template-columns: clamp(232px, 28vw, 260px) minmax(var(--preview-width), 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: clamp(24px, 3vw, 32px);
-  padding: 18px var(--studio-inset) 24px;
+  padding: 6px var(--studio-inset) 24px;
 }
 .studio-canvas h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
 .component-tools { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -159,7 +159,7 @@ button:not([data-slot="button"]):focus-visible { outline: 2px solid var(--ring);
 .library-card-meta span, .library-card-state { color: var(--muted-foreground); }
 
 .display-console { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.screen-meta { display: flex; justify-content: space-between; align-items: center; flex: none; gap: 12px; min-height: 36px; margin-bottom: 8px; }
+.screen-meta { display: flex; justify-content: space-between; align-items: center; flex: none; gap: 12px; min-height: 28px; margin-bottom: 8px; }
 .preview-panel {
   display: flex;
   flex-direction: column;
@@ -204,6 +204,7 @@ button:not([data-slot="button"]):focus-visible { outline: 2px solid var(--ring);
 .preview-settings-fields { min-width: 0; }
 .display-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   flex: none;
   gap: 6px;
@@ -211,8 +212,11 @@ button:not([data-slot="button"]):focus-visible { outline: 2px solid var(--ring);
   border-top: 1px solid var(--border);
   background: var(--studio-panel);
 }
+.display-device-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.device-connection-name { max-width: 112px; overflow: hidden; text-overflow: ellipsis; }
+.layout-actions { display: flex; align-items: center; gap: 6px; flex: 1 0 auto; }
 .action-button { flex: none; }
-.sync-button { min-width: 110px; margin-inline-start: auto; }
+.sync-button { min-width: 96px; margin-inline-start: auto; }
 .sync-button:disabled { opacity: .55; }
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -241,7 +245,7 @@ button:not([data-slot="button"]):focus-visible { outline: 2px solid var(--ring);
   justify-content: space-between;
   gap: 7px;
 }
-.library-heading { flex: none; min-height: 36px; margin-bottom: 8px; }
+.library-heading { flex: none; min-height: 28px; margin-bottom: 8px; }
 .component-group { border-top: 1px solid var(--studio-rule); }
 .component-group + .component-group { margin-top: 10px; }
 .component-group-heading { min-height: 36px; gap: 4px; }
@@ -369,15 +373,14 @@ button:not([data-slot="button"]):focus-visible { outline: 2px solid var(--ring);
 .display-color-picker-area { height: 110px; min-height: 0; aspect-ratio: auto; }
 .display-check { display: flex; align-items: center; gap: 6px; }
 .display-state-option { display: inline-flex; align-items: center; gap: 6px; }
-.screen-appearance { display: grid; gap: 8px; }
-.screen-theme-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.screen-appearance { display: grid; gap: 6px; }
+.screen-theme-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .display-palette { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.screen-palette-reset { justify-self: end; height: 24px; }
 .usb-settings, .usb-settings fieldset { display: grid; gap: 12px; }
 .usb-settings legend { margin-bottom: 6px; font-size: 13px; font-weight: 600; }
 .usb-port { display: flex; gap: 8px; align-items: center; }
-.usb-preview-label { margin-bottom: 6px; color: var(--muted-foreground); font-size: 12px; }
-.device-setting-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.device-setting-row input[type="number"] { width: 110px; }
+.device-connection-hint { color: var(--muted-foreground); font-size: 12px; }
 .display-theme-options { display: flex; gap: 4px; }
 .theme-swatch { width: 12px; height: 12px; border: 1px solid var(--border); border-radius: 3px; }
 .source-settings-panel .source-connect { border: 0; margin-top: 8px; padding-top: 8px; }

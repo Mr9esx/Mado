@@ -21,14 +21,14 @@ export type CodexStatus = {
 }
 
 const labels: Record<Phase, string> = {
-  disabled: '未连接',
+  disabled: '未启用',
   checking: '检测中',
   signingIn: '登录中',
-  connected: '已连接',
+  connected: '采集正常',
   needsCli: '缺少 CLI',
   needsLogin: '待登录',
   unsupportedLogin: '需 ChatGPT 登录',
-  error: '连接异常',
+  error: '采集异常',
 }
 
 export const codexLabel = (status?: CodexStatus) => status ? labels[status.phase] : '读取中'

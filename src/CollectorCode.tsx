@@ -93,6 +93,7 @@ export function collectorCompletion(context: CompletionContext, file: string, dr
     return { from, options: [
       { label: 'sampledAtUnixMs', type: 'property', detail: '本次采样时间' },
       snippetCompletion('log(${message})', { label: 'log', type: 'method', detail: '输出试跑日志' }),
+      ...(v2 ? [snippetCompletion('forInstance(${id})', { label: 'forInstance', type: 'method', detail: '批量采集时使用该实例的授权' })] : []),
       ...properties(v2 ? ['http', 'files', 'process', 'system'] : []),
     ] }
   } else if (/\b(?:inputs|settings)\.[\w]*$/.test(before)) {
@@ -106,7 +107,7 @@ export function collectorCompletion(context: CompletionContext, file: string, dr
         label: 'defineModule', type: 'function', detail: 'Mado SDK',
       }),
       ...(file === draft.entry ? properties(['name', 'schedule', 'refreshSeconds', 'enabled', 'resources',
-        ...(v2 ? ['settings', 'permissions', 'default', 'description', 'required', 'secret', 'methods', 'args'] : ['inputs']),
+        ...(v2 ? ['instances', 'batch', 'collectBatch', 'settings', 'permissions', 'default', 'description', 'required', 'secret', 'methods', 'args'] : ['inputs']),
         'widgets', 'kind', 'label', 'valueType', 'unit', 'outputKey', 'supportedSpans', 'stateKeys',
         'stateLabels', 'chart', 'trend', 'range', 'format', 'accentColor', 'collect']) : []),
       ...(v2 && file === draft.entry ? settingsOptions().filter(({ label }) => /^[A-Z][A-Z0-9_]*$/.test(label)) : []),

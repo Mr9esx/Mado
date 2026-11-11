@@ -3,8 +3,6 @@ import { useState } from 'react'
 import { Button } from './components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from './components/ui/dialog'
 import { Input } from './components/ui/input'
-import { CodexSettings } from './CodexSettings'
-import { useCodexStatus } from './codex'
 import { chooseResource, type Approval, type GrantRequest } from './collectorApi'
 
 export type AuthorizationPurpose = 'test' | 'publish' | 'enable'
@@ -70,9 +68,4 @@ export function CollectorAuthorization({ requests, purpose, onFinish }: {
     </form>
     </DialogContent>
   </Dialog>
-}
-
-export function CollectorCodexSettings({ onDismiss }: { onDismiss: () => void }) {
-  const { status, error } = useCodexStatus()
-  return <CodexSettings status={status} error={error} onDismiss={onDismiss} />
 }

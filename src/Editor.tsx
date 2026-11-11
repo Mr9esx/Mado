@@ -1,6 +1,7 @@
-import { ArrowLeft, Check, ChevronDown, CircleAlert, Monitor, Plus, RefreshCw, Settings2, Terminal, Undo2, Bluetooth, Usb, Wifi } from 'lucide-react'
-import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
+import { ArrowLeft, Check, ChevronDown, CircleAlert, Monitor, Plus, RefreshCw, Terminal, Undo2 } from 'lucide-react'
+import { Fragment, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { Button } from '@/components/ui/button'
+import { NumberField, NumberFieldDecrement, NumberFieldGroup, NumberFieldIncrement, NumberFieldInput } from '@/components/reui/number-field'
 import { openDesktopWidget, applyPages, useDevice } from './device'
 import { canPlace, cardWidget, cellAt, cellHeight, cellWidth, defaultDisplayTheme, display, firstOpenCell, repositionCard, sameLayout, widgetCatalog, type DisplayPage, type DisplayTheme, type LayoutItem, type Widget } from './layout'
 import { PageManager } from './PageManager'
@@ -9,7 +10,6 @@ import { recordLayoutEdit, sameLayoutEdit, type LayoutHistory } from './layoutDr
 import { Screen } from './Screen'
 import { WidgetReading } from './WidgetReading'
 import { codexLabel, useCodexStatus } from './codex'
-import { AppSettings } from './AppSettings'
 import { AppThemeButton } from './AppThemeButton'
 import { DeviceScreenControls } from './DeviceScreenControls'
 import { CodexSettings } from './CodexSettings'
@@ -18,7 +18,7 @@ import { ScreenAppearance } from './ScreenAppearance'
 import { useCardPlayback } from './useCardPlayback'
 import { useAppearance } from './appearance'
 import { openCollectors } from './collectorApi'
-import { useDisplayConnection } from './displayConnection'
+import { displayTransportLabels, useDisplayConnection } from './displayConnection'
 import { DisplayConnectionDialog } from './DisplayConnectionDialog'
 
 type Drag = {
@@ -41,9 +41,13 @@ const thumbnailHeight = 44
 const thumbnailViewport = { width: thumbnailHeight * cellWidth / cellHeight, height: thumbnailHeight }
 const thumbnailCard = { width: cellWidth, height: cellHeight, transform: `scale(${thumbnailHeight / cellHeight})` }
 const editorGeometry = { '--preview-width': `${display.width}px` } as CSSProperties
+const pushIntervalStep = 500
 
 const arrowOffsets: Record<string, [number, number]> = {
   ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+}
+const connectionLabels = {
+  waiting: '未连接', syncing: '连接中', connected: '已连接', disconnected: '已断开', failed: '连接失败', reconnecting: '重连中',
 }
 
 export function Editor() {
@@ -51,7 +55,7 @@ export function Editor() {
   const device = useDisplayConnection()
   const { appearance } = useAppearance()
   const { status: codexStatus, error: sourceError } = useCodexStatus()
-  const [showSettings, setShowSettings] = useState<'device' | 'codex' | null>(null)
+  const [showCodexSettings, setShowCodexSettings] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set<string>())
   const [history, setHistory] = useState<LayoutHistory | null>(null)
   const [pageManagerKey, setPageManagerKey] = useState(0)
@@ -86,9 +90,10 @@ export function Editor() {
   const playback = cardPlayback.frame && selectedWidget ? { ...cardPlayback.frame, widgetId: selectedWidget.id } : undefined
   const groups = new Map<string, Widget[]>()
   for (const widget of catalog.values()) {
-    const group = groups.get(widget.group)
+    const groupId = widget.moduleId ?? widget.group
+    const group = groups.get(groupId)
     if (group) group.push(widget)
-    else groups.set(widget.group, [widget])
+    else groups.set(groupId, [widget])
   }
   const resolved = [...new Set(pages.flatMap(page => page.layout.map(item => item.id)))].flatMap(id => catalog.get(id) ?? [])
   const dirty = snapshot ? snapshot.lastSyncedAt == null || !sameLayoutEdit(draft ?? saved, saved)
@@ -105,6 +110,11 @@ export function Editor() {
   }
   const SyncIcon = syncError ? CircleAlert : RefreshCw
   const DisplayIcon = displayError ? CircleAlert : Monitor
+  const { transport, phase = 'waiting', deviceId, port, reconnecting, reason } = device.status ?? {}
+  const connectionPhase = reconnecting ? 'reconnecting' : phase
+  const connectionLabel = `${transport ? `${displayTransportLabels[transport]} ` : ''}${connectionLabels[connectionPhase]}`
+  const deviceName = deviceId && /^[0-9a-f]{12}$/i.test(deviceId) ? `Mado-${deviceId.slice(-4).toUpperCase()}`
+    : port?.split('/').at(-1) || (transport ? 'Mado' : '设备')
 
   function toggleGroup(id: string) {
     setCollapsedGroups(current => {
@@ -269,7 +279,7 @@ export function Editor() {
     <main className="studio studio-editor" aria-label="布局编辑器" onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={clearDrag} onLostPointerCapture={clearDrag}
       onKeyDown={(event) => {
         if (event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing
-          && !showSettings && !showDevice && event.currentTarget.contains(event.target as Node)) {
+          && !showCodexSettings && !showDevice && event.currentTarget.contains(event.target as Node)) {
           clearDrag()
           select('')
         }
@@ -280,37 +290,26 @@ export function Editor() {
           <Button size="sm" variant="ghost" type="button" title={displayError || '打开桌面控件'} onClick={showDisplay}>
             <DisplayIcon size={15} />桌面控件
           </Button>
-          <Button size="sm" variant="ghost" title={collectorError || undefined} onClick={() => {
-            setCollectorError('')
-            void openCollectors().catch(reason => setCollectorError(String(reason)))
-          }}>
-            {collectorError ? <CircleAlert size={15} /> : <Terminal size={15} />}采集器
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => {
-            setShowDevice(true)
-            void device.refreshPorts().catch(() => {})
-          }}>
-            {device.connection?.transport === 'ble' ? <Bluetooth size={15} />
-              : device.connection?.transport === 'wifi' ? <Wifi size={15} /> : <Usb size={15} />}
-            {device.connection?.phase === 'connected'
-              ? device.connection.transport === 'ble' ? '蓝牙已连接'
-                : device.connection.transport === 'wifi' ? 'Wi-Fi 已连接' : 'USB 已连接'
-              : '设备连接'}
-          </Button>
           <AppThemeButton />
-          <Button size="sm" variant="ghost" onClick={() => setShowSettings('device')}>
-            <Settings2 size={15} />设置
-          </Button>
         </div>
       </header>
       <div className="studio-canvas" style={editorGeometry}>
         <aside className="component-tools" aria-label="组件库">
           <div className="library-heading">
             <h2>组件</h2>
+            <Button size="xs" variant="ghost" type="button" title={collectorError || '打开采集器工作区'} onClick={() => {
+              setCollectorError('')
+              void openCollectors().catch(reason => setCollectorError(`无法打开采集器。${String(reason)}`))
+            }}>
+              {collectorError ? <CircleAlert size={14} aria-hidden="true" /> : <Terminal size={14} aria-hidden="true" />}管理采集器
+            </Button>
           </div>
           <div className="library-scroll">
             {Array.from(groups, ([groupId, definitions]) => {
               const groupName = definitions[0].groupName || (groupId === 'codex' ? 'Codex' : groupId)
+              const widgets = definitions[0].moduleId
+                ? [...definitions].sort((a, b) => (a.instanceName ?? '').localeCompare(b.instanceName ?? '', 'zh-CN', { numeric: true }))
+                : definitions
               const expanded = !collapsedGroups.has(groupId)
               const listId = `component-list-${groupId}`
               return (
@@ -326,20 +325,23 @@ export function Editor() {
                     {groupId === 'codex' && (
                       <Button size="xs" variant="ghost" type="button" className={`source-badge${codexStatus?.phase === 'connected' ? ' is-connected' : ''}`}
                         aria-label={`Codex 采集器，${codexLabel(codexStatus)}`}
-                        onClick={() => setShowSettings('codex')}>
-                        {codexStatus?.phase === 'disabled' ? '连接' : <><i aria-hidden="true" />{codexLabel(codexStatus)}</>}
+                        onClick={() => setShowCodexSettings(true)}>
+                        {codexStatus?.phase === 'disabled' ? '启用采集' : <><i aria-hidden="true" />{codexLabel(codexStatus)}</>}
                       </Button>
                     )}
                   </div>
                   <div className="component-list" id={listId} hidden={!expanded}>
-                    {definitions.map((definition) => {
+                    {widgets.map((definition, index) => {
                       const placed = layout.find((item) => item.id === definition.id)
                       const [defaultWidth, defaultHeight] = definition.sizes[0]
                       const item = placed ?? { id: definition.id, x: 0, y: 0, w: defaultWidth, h: defaultHeight }
                       const size = `${item.h} × ${item.w}`
+                      const instanceHeading = definition.instanceName && definition.name !== definition.instanceName
+                        && widgets[index - 1]?.group !== definition.group
                       return (
+                        <Fragment key={definition.id}>
+                        {instanceHeading && <h4 className="px-1 text-xs text-muted-foreground">{definition.instanceName}</h4>}
                         <Button size="sm" variant="outline"
-                          key={definition.id}
                           className={`library-card${selectedId === definition.id ? ' is-current' : ''}`}
                           type="button"
                           aria-label={`${placed ? '选择' : '添加'}${definition.name}，${size}`}
@@ -363,6 +365,7 @@ export function Editor() {
                           </span>
                           {placed ? <Check className="library-card-state" size={15} aria-hidden="true" /> : <Plus className="library-card-state" size={15} aria-hidden="true" />}
                         </Button>
+                        </Fragment>
                       )
                     })}
                   </div>
@@ -384,7 +387,7 @@ export function Editor() {
               <div className="screen-stage" onClick={event => {
                 if (event.target instanceof Element && !event.target.closest('[data-widget]')) select('')
               }}>
-                <Screen surface="desktop" pages={pages} pageId={currentPage.id} layout={layout} snapshot={snapshot} palette={theme} gridRef={grid}
+                <Screen connection={device.screenConnection} pages={pages} pageId={currentPage.id} layout={layout} snapshot={snapshot} palette={theme} gridRef={grid}
                   selected={selectedId} dragging={dragPreview?.item.id} playback={playback} target={target}
                   onSelect={select} onRemove={removeCard} onCardPointerDown={beginDrag} onCardKeyDown={editWithKeys} />
               </div>
@@ -392,9 +395,9 @@ export function Editor() {
             </div>
             <section className="preview-settings" aria-labelledby="preview-settings-title">
               <div className="preview-settings-header">
-                <h3 id="preview-settings-title">{selectedWidget ? `组件设置 · ${selectedWidget.name}` : '屏幕外观'}</h3>
+                <h3 id="preview-settings-title">{selectedWidget ? `组件设置 · ${selectedWidget.name}` : '屏幕配色'}</h3>
                 {selectedWidget && <Button size="xs" variant="ghost" type="button" onClick={() => select('')}>
-                  <ArrowLeft size={13} />返回屏幕外观
+                  <ArrowLeft size={13} />返回屏幕配色
                 </Button>}
               </div>
               <div className="preview-settings-body" key={selectedWidget ? `${currentPage.id}:${selectedWidget.id}` : 'screen'}>
@@ -408,12 +411,47 @@ export function Editor() {
               </div>
             </section>
             <div className="display-toolbar">
-              {history && <Button size="sm" variant="outline" className="action-button" type="button" disabled={syncing}
-                title="撤销当前布局草稿的最近一步" onClick={undoEdit}><Undo2 size={14} />撤销改动</Button>}
-              <Button size="sm" className="action-button sync-button" disabled={!snapshot || !dirty || syncing || !!validationError}
-                title={syncError || '保存全部页面并同步到显示端'} onClick={synchronize}>
-                <SyncIcon size={14} className={syncing ? 'spinning' : ''} />{syncing ? '应用中' : '应用布局'}
-              </Button>
+              <div className="display-device-controls" role="group" aria-label="设备控制">
+                <Button size="xs" variant="outline" type="button" aria-haspopup="dialog"
+                  aria-label={`设备连接，${deviceName} · ${connectionLabel}`}
+                  title={reason || '打开设备连接'} onClick={() => {
+                    setShowDevice(true)
+                    void device.refreshPorts().catch(() => {})
+                  }}>
+                  <span className="device-connection-name">{deviceName}</span>
+                  <span aria-hidden="true" className="text-muted-foreground">·</span>
+                  <span role="status" data-phase={connectionPhase}
+                    className="text-muted-foreground data-[phase=connected]:text-emerald-700 dark:data-[phase=connected]:text-emerald-400 data-[phase=failed]:text-destructive">
+                    {connectionLabel}
+                  </span>
+                </Button>
+                <NumberField id="device-push-interval" min={500} max={60000} step={pushIntervalStep}
+                  smallStep={pushIntervalStep} largeStep={pushIntervalStep}
+                  required allowOutOfRange format={{ useGrouping: false }} value={pushInterval}
+                  onValueChange={value => {
+                    if (value !== null && Number.isInteger(value) && value >= 500 && value <= 60000) setPushInterval(value)
+                  }}>
+                  <NumberFieldGroup className="gap-1 overflow-hidden ps-1.5 text-xs" title="500–60000 毫秒，下次连接生效。蓝牙至少间隔 2000 毫秒。">
+                    <label htmlFor="device-push-interval" className="shrink-0 whitespace-nowrap text-muted-foreground">
+                      推送间隔<span className="sr-only">（毫秒）</span>
+                    </label>
+                    <NumberFieldInput className="w-10 shrink-0 text-right" />
+                    <span className="text-muted-foreground" aria-hidden="true">ms</span>
+                    <div className="grid h-full w-[18px] shrink-0 grid-rows-2 divide-y divide-input border-s border-input">
+                      <NumberFieldIncrement aria-label="增加推送间隔" />
+                      <NumberFieldDecrement aria-label="减少推送间隔" />
+                    </div>
+                  </NumberFieldGroup>
+                </NumberField>
+              </div>
+              <div className="layout-actions">
+                {history && <Button size="xs" variant="outline" className="action-button" type="button" disabled={syncing}
+                  title="撤销当前布局草稿的最近一步" onClick={undoEdit}><Undo2 size={14} />撤销改动</Button>}
+                <Button size="xs" className="action-button sync-button" disabled={!snapshot || !dirty || syncing || !!validationError}
+                  title={syncError || '保存全部页面并同步到显示端'} onClick={synchronize}>
+                  <SyncIcon size={14} className={syncing ? 'spinning' : ''} />{syncing ? '应用中' : '应用布局'}
+                </Button>
+              </div>
             </div>
           </div>
           {(syncError || validationError) && <p className="page-error" role="alert">{syncError || validationError}</p>}
@@ -426,9 +464,7 @@ export function Editor() {
         <WidgetReading widget={cardWidget(draggedWidget, dragPreview.item.appearance)}
           width={dragPreview.item.w} height={dragPreview.item.h} value={snapshot?.values[dragPreview.item.id]} />
       </div>}
-      {showSettings === 'device' && <AppSettings onDismiss={() => setShowSettings(null)}
-        interval={pushInterval} onIntervalChange={setPushInterval} />}
-      {showSettings === 'codex' && <CodexSettings status={codexStatus} error={sourceError} onDismiss={() => setShowSettings(null)} />}
+      {showCodexSettings && <CodexSettings status={codexStatus} error={sourceError} onDismiss={() => setShowCodexSettings(false)} />}
       {showDevice && <DisplayConnectionDialog device={device} interval={pushInterval} onDismiss={() => setShowDevice(false)} />}
     </main>
   )
