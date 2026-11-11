@@ -10,7 +10,7 @@
 <p align="center">把 Codex 额度、电脑状态和关注的直播放到一块小屏上。</p>
 
 <p align="center">
-  <a href="#快速开始">快速开始</a> ·
+  <a href="#下载安装">下载安装</a> ·
   <a href="#连接实体屏">连接实体屏</a> ·
   <a href="docs/studio-guide.md">使用指南</a>
 </p>
@@ -34,7 +34,18 @@
 
 ## 快速开始
 
-从 [GitHub Releases](https://github.com/Mr9esx/Mado/releases/latest) 下载对应的安装包。macOS 提供 Apple 芯片与 Intel 芯片的 DMG，Windows x64 提供安装程序，Linux x64 提供 `.deb` 和 AppImage。固件烧录包也在同一页。
+### 下载安装
+
+| 平台 | v0.1.0 安装包 |
+| --- | --- |
+| macOS（Apple 芯片） | [下载 DMG](https://github.com/Mr9esx/Mado/releases/download/v0.1.0/mado-studio-v0.1.0-macos-arm64.dmg) |
+| macOS（Intel 芯片） | [下载 DMG](https://github.com/Mr9esx/Mado/releases/download/v0.1.0/mado-studio-v0.1.0-macos-x64.dmg) |
+| Windows x64 | [下载 EXE](https://github.com/Mr9esx/Mado/releases/download/v0.1.0/mado-studio-v0.1.0-windows-x64.exe) |
+| Linux x64 | [下载 DEB](https://github.com/Mr9esx/Mado/releases/download/v0.1.0/mado-studio-v0.1.0-linux-x64.deb) · [下载 AppImage](https://github.com/Mr9esx/Mado/releases/download/v0.1.0/mado-studio-v0.1.0-linux-x64.AppImage) |
+
+macOS 应用未经过 Apple 公证，Windows 安装程序未签名。可在 [GitHub Releases](https://github.com/Mr9esx/Mado/releases/latest) 查看最新版本，或下载 [v0.1.0 的 SHA-256 校验清单](https://github.com/Mr9esx/Mado/releases/download/v0.1.0/SHA256SUMS.txt)。
+
+### 从源码运行
 
 从源码运行时，以下命令以 macOS 为例，需要 Node.js 22.18+、Rust 1.95+ 和 [Tauri 构建依赖](https://v2.tauri.app/start/prerequisites/)。
 
@@ -45,13 +56,17 @@ npm ci
 npm run tauri dev
 ```
 
+### 开始使用
+
 1. 打开 Studio，从左侧组件库把卡片拖到预览画布。系统采集器会自动读取本机数据。
 2. 点击「应用布局」保存。再点窗口顶部的「桌面控件」，就能把看板放在桌面上。
 3. 想加 Codex 卡片，先在组件库打开 Codex 设置并连接本机 CLI。要添加 GitHub 仓库或 B 站 UP 主，打开「管理采集器」，填写实例参数并启用。详见 [Codex 连接](docs/studio-guide.md#连接-codex)和[内置采集器](docs/builtin-collectors.md)。
 
 ## 连接实体屏
 
-自行下载适用于 **LILYGO T-Display-C5 V1.0** 的 [Mado ZIP 烧录包](docs/firmware-resources.md#studio-烧录包)。接上 USB 数据线，在 Studio 预览底栏打开「设备连接」→「烧录固件」，选择 ZIP 和串口。烧录完成后返回连接面板，选择一种方式：
+为 **LILYGO T-Display-C5 V1.0** 下载对应的 Mado 固件。首次刷入 Mado 时选[首次安装包](https://github.com/Mr9esx/Mado/releases/download/v0.1.0/mado-firmware-v0.1.0-tdisplay-c5-v1.0-install.zip)。已装有 Mado 固件时选[升级包](https://github.com/Mr9esx/Mado/releases/download/v0.1.0/mado-firmware-v0.1.0-tdisplay-c5-v1.0-upgrade.zip)，可保留字库和设备配置。
+
+接上 USB 数据线，在 Studio 预览底栏打开「设备连接」→「烧录固件」，直接选择下载的 ZIP 和串口。烧录完成后返回连接面板，选择一种方式：
 
 - **USB**：接上 USB 数据线，选择设备端口，再点「连接设备」。第一次使用可以从 USB 开始。
 - **蓝牙（macOS）**：长按开发板的 BOOT 键进入设置，在设备上开启「蓝牙配对」。回到 Studio 扫描并连接，按系统提示输入屏上的六位码。
