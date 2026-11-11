@@ -34,6 +34,8 @@ pub struct Request {
     pub entry: String,
     pub files: BTreeMap<String, String>,
     pub inputs: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub private_settings: Vec<String>,
     pub sampled_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
@@ -147,6 +149,7 @@ fn run<T: serde::de::DeserializeOwned>(
     request: Request,
     entry_kind: Entry,
     logs: Rc<RefCell<Vec<String>>>,
+    hidden: Rc<Vec<String>>,
     broker: impl FnMut(Call) -> Reply + 'static,
 ) -> Result<T, String> {
     let runtime = Runtime::new().map_err(|error| error.to_string())?;
@@ -226,7 +229,7 @@ fn run<T: serde::de::DeserializeOwned>(
             host.set("log", Function::new(ctx.clone(), move |message: String| {
                 let mut logs = logs.borrow_mut();
                 if logs.len() < 40 {
-                    logs.push(message.chars().take(400).collect());
+                    logs.push(safe_message(message, &hidden, 400));
                 }
             })?)?;
             let (module, load) = Module::declare(ctx.clone(), request.entry, entry)?.eval()?;
@@ -255,23 +258,61 @@ pub fn evaluate(request: Request) -> ResultData {
 }
 
 pub fn evaluate_with(request: Request, broker: impl FnMut(Call) -> Reply + 'static) -> ResultData {
+    let hidden = Rc::new(
+        request
+            .private_settings
+            .iter()
+            .filter_map(|key| request.inputs.get(key)?.as_str())
+            .filter(|value| !value.is_empty())
+            .flat_map(|value| {
+                let quoted = Value::String(value.into()).to_string();
+                [value.to_owned(), quoted[1..quoted.len() - 1].to_owned()]
+            })
+            .collect(),
+    );
     let logs = Rc::new(RefCell::new(Vec::new()));
-    let result = run(request, Entry::Collect, Rc::clone(&logs), broker);
+    let result = run::<Collected>(
+        request,
+        Entry::Collect,
+        Rc::clone(&logs),
+        Rc::clone(&hidden),
+        broker,
+    );
     let logs = logs.take();
     match result {
-        Ok(result) => ResultData {
-            result: Some(result),
-            logs,
-            error: None,
-            definition: None,
-        },
+        Ok(mut result) => {
+            if !hidden.is_empty() && echoes_private_setting(&result.status.to_string(), &hidden) {
+                result.status = Value::Null;
+            }
+            ResultData {
+                result: Some(result),
+                logs,
+                error: None,
+                definition: None,
+            }
+        }
         Err(error) => ResultData {
             result: None,
             logs,
-            error: Some(error.chars().take(3000).collect()),
+            error: Some(safe_message(error, &hidden, 3000)),
             definition: None,
         },
     }
+}
+
+fn echoes_private_setting(message: &str, hidden: &[String]) -> bool {
+    hidden.iter().any(|value| message.contains(value))
+}
+
+fn safe_message(message: String, hidden: &[String], limit: usize) -> String {
+    if echoes_private_setting(&message, hidden) {
+        const REDACTED: &str = "已隐藏包含变量值的采集消息。";
+        if echoes_private_setting(REDACTED, hidden) {
+            return String::new();
+        }
+        return REDACTED.into();
+    }
+    message.chars().take(limit).collect()
 }
 
 pub(super) fn inspect_code(request: Request) -> Reply {
@@ -279,6 +320,7 @@ pub(super) fn inspect_code(request: Request) -> Reply {
         request,
         Entry::Inspect,
         Rc::new(RefCell::new(Vec::new())),
+        Rc::new(Vec::new()),
         |_| Err("读取模块定义时禁止访问宿主资源。".into()),
     )
     .map_err(|error| error.chars().take(3000).collect())
@@ -433,6 +475,7 @@ mod tests {
                 ("src/helper.mjs".into(), "export const value = 42".into()),
             ]),
             inputs: json!({}),
+            private_settings: Vec::new(),
             sampled_at: 1,
             action: None,
             state: Value::Null,
@@ -470,6 +513,7 @@ mod tests {
                 ),
             ]),
             inputs: Value::Null,
+            private_settings: Vec::new(),
             sampled_at: 0,
             action: None,
             state: Value::Null,
@@ -515,6 +559,7 @@ mod capability_tests {
                 entry: "index.mjs".into(),
                 files: BTreeMap::from([("index.mjs".into(), source.into())]),
                 inputs: json!({}),
+                private_settings: Vec::new(),
                 sampled_at: 0,
                 action: None,
                 state: Value::Null,

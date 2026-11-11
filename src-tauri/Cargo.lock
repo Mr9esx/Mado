@@ -2506,6 +2506,8 @@ dependencies = [
 name = "mado-studio"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
+ "base64 0.23.1",
  "btleplug",
  "cap-std",
  "futures-util",
@@ -2523,6 +2525,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
  "time",
  "tokio",
  "tokio-util",

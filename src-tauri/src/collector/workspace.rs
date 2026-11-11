@@ -1,9 +1,10 @@
 use super::{
     builtin, io,
     model::{
-        path_valid, BindingHint, History, Manifest, Permission, Project, MAX_FILES, MAX_PROJECT,
+        path_valid, BindingHint, History, Manifest, Permission, Project, Setting, MAX_FILES,
+        MAX_PROJECT,
     },
-    now, runner,
+    now, runner, vault::KeyStore,
 };
 use crate::{device::Device, SNAPSHOT_EVENT};
 use serde::{Deserialize, Serialize};
@@ -125,6 +126,7 @@ impl Draft {
             entry: self.entry.clone(),
             files: self.files.clone(),
             inputs: Value::Null,
+            private_settings: Vec::new(),
             sampled_at: 0,
             action: None,
             state: Value::Null,
@@ -203,11 +205,11 @@ struct Module {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Instance {
+pub struct Instance<T = String> {
     id: String,
     module_id: String,
     name: String,
-    settings: BTreeMap<String, String>,
+    settings: BTreeMap<String, T>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     approved_permissions: BTreeMap<String, Permission>,
     refresh_seconds: u64,
@@ -215,14 +217,74 @@ pub struct Instance {
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
-struct Catalog {
+struct Catalog<T = String> {
     modules: BTreeMap<String, Module>,
-    instances: BTreeMap<String, Instance>,
+    instances: BTreeMap<String, Instance<T>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum StoredSetting {
+    Plain(String),
+    Encrypted { ciphertext: String },
+}
+
+impl<T> Catalog<T> {
+    fn declared_settings(&self, module_id: &str) -> Option<&BTreeMap<String, Setting>> {
+        // Bundled releases are deliberately excluded from the disk catalog.
+        builtin::get(module_id)
+            .or_else(|| {
+                self.modules
+                    .get(module_id)?
+                    .released
+                    .as_ref()
+                    .map(|r| &r.project)
+            })
+            .map(|project| &project.manifest.definition.settings)
+    }
+
+    fn is_variable(&self, module_id: &str, key: &str) -> bool {
+        self.declared_settings(module_id)
+            .and_then(|settings| settings.get(key))
+            .is_some_and(Setting::is_variable)
+    }
+
+    fn map_settings<U>(
+        mut self,
+        mut map: impl FnMut(bool, T) -> Result<Option<U>, String>,
+    ) -> Result<Catalog<U>, String> {
+        let mut instances = BTreeMap::new();
+        for (id, instance) in std::mem::take(&mut self.instances) {
+            let mut settings = BTreeMap::new();
+            for (key, value) in instance.settings {
+                if let Some(value) = map(self.is_variable(&instance.module_id, &key), value)? {
+                    settings.insert(key, value);
+                }
+            }
+            instances.insert(
+                id,
+                Instance {
+                    id: instance.id,
+                    module_id: instance.module_id,
+                    name: instance.name,
+                    settings,
+                    approved_permissions: instance.approved_permissions,
+                    refresh_seconds: instance.refresh_seconds,
+                    enabled: instance.enabled,
+                },
+            );
+        }
+        Ok(Catalog {
+            modules: self.modules,
+            instances,
+        })
+    }
 }
 
 pub struct Workspace {
     path: PathBuf,
     catalog: Catalog,
+    key: Option<KeyStore>,
     tested: BTreeMap<String, (Draft, Project)>,
     status: BTreeMap<String, Status>,
     interactions: BTreeMap<String, Interaction>,
@@ -266,13 +328,125 @@ pub struct WorkspaceView {
 }
 
 impl Workspace {
+    fn load(path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut key = None;
+        let directory = path.parent().ok_or("找不到采集器配置目录。")?;
+        let mut catalog = match fs::read(&path) {
+            Ok(bytes) => {
+                let stored: Catalog<StoredSetting> =
+                    serde_json::from_slice(&bytes).map_err(|_| "采集器配置文件格式无效。")?;
+                stored.map_settings(|variable, value| match value {
+                    StoredSetting::Plain(value) => Ok(Some(value)),
+                    StoredSetting::Encrypted { ciphertext } => {
+                        if key.is_none() {
+                            key = Some(KeyStore::load(directory)?);
+                        }
+                        let value = key.as_ref().unwrap().decrypt(&ciphertext)?;
+                        // An upgrade can remove a bundled variable. Never
+                        // turn its old ciphertext into an ordinary setting.
+                        Ok(variable.then_some(value))
+                    }
+                })?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Catalog::default(),
+            Err(error) => return Err(error.into()),
+        };
+        for project in builtin::projects() {
+            let id = &project.manifest.module_id;
+            let definition = &project.manifest.definition;
+            let schedule = definition
+                .schedule
+                .as_ref()
+                .expect("bundled collector schedule");
+            catalog.modules.insert(
+                id.clone(),
+                Module {
+                    draft: Draft::from_project(project),
+                    released: Some(Release {
+                        revision: 1,
+                        project: project.clone(),
+                    }),
+                    previous: None,
+                },
+            );
+            let instance = catalog
+                .instances
+                .entry(id.clone())
+                .or_insert_with(|| Instance {
+                    id: id.clone(),
+                    module_id: id.clone(),
+                    name: definition.name.clone(),
+                    settings: BTreeMap::new(),
+                    approved_permissions: definition.permissions.clone(),
+                    refresh_seconds: schedule.refresh_seconds,
+                    enabled: schedule.enabled,
+                });
+            instance.refresh_seconds = schedule.refresh_seconds;
+            // Bundled paths stay as previously authorized. Updated grants require explicit reconfiguration.
+            if instance.approved_permissions != definition.permissions {
+                instance.enabled = false;
+            }
+        }
+        Ok(Self {
+            path,
+            catalog,
+            key,
+            tested: BTreeMap::new(),
+            status: BTreeMap::new(),
+            interactions: BTreeMap::new(),
+            refresh: Default::default(),
+            sequence: 0,
+        })
+    }
+
+    fn instance_status(&self, id: &str) -> Result<Value, String> {
+        let instance = self.catalog.instances.get(id).ok_or("找不到采集实例。")?;
+        let status = self.status.get(id);
+        let settings: BTreeMap<_, _> = instance
+            .settings
+            .iter()
+            .filter(|(key, _)| !self.catalog.is_variable(&instance.module_id, key))
+            .collect();
+        Ok(json!({
+            "sequence": self.sequence,
+            "enabled": instance.enabled,
+            "settings": settings,
+            "data": status.map(|status| &status.data),
+            "error": status.and_then(|status| status.error.as_deref()),
+            "action": self.interactions.get(id).map(|action| &action.name),
+        }))
+    }
+
     fn save(&mut self, next: Catalog) -> Result<(), String> {
+        let directory = self.path.parent().ok_or("找不到采集器配置目录。")?;
+        if let Some(key) = &self.key {
+            key.verify_file(directory)?;
+        }
         let mut stored = next.clone();
         stored.modules.retain(|id, _| builtin::get(id).is_none());
-        let bytes = serde_json::to_vec(&stored).map_err(|error| error.to_string())?;
-        let temp = self.path.with_extension("tmp");
-        fs::write(&temp, bytes).map_err(|error| error.to_string())?;
-        fs::rename(&temp, &self.path).map_err(|error| error.to_string())?;
+        let mut has_variables = false;
+        let stored = stored.map_settings(|variable, value| {
+            if !variable {
+                return Ok(Some(StoredSetting::Plain(value)));
+            }
+            if self.key.is_none() {
+                self.key = Some(KeyStore::load_or_create(directory)?);
+            }
+            has_variables = true;
+            let ciphertext = self.key.as_ref().unwrap().encrypt(&value)?;
+            Ok(Some(StoredSetting::Encrypted { ciphertext }))
+        })?;
+        let mut temp =
+            tempfile::NamedTempFile::new_in(directory).map_err(|error| error.to_string())?;
+        serde_json::to_writer(&mut temp, &stored).map_err(|error| error.to_string())?;
+        temp.as_file()
+            .sync_all()
+            .map_err(|error| error.to_string())?;
+        temp.persist(&self.path)
+            .map_err(|error| error.to_string())?;
+        if !has_variables {
+            self.key = None;
+        }
         self.catalog = next;
         Ok(())
     }
@@ -373,20 +547,7 @@ pub(crate) const STATUS_EVENT: &str = "collector-status";
 pub(crate) fn instance_status(app: &AppHandle, id: &str) -> Result<Value, String> {
     let state = app.state::<Mutex<Workspace>>();
     let workspace = state.lock().map_err(|error| error.to_string())?;
-    let instance = workspace
-        .catalog
-        .instances
-        .get(id)
-        .ok_or("找不到采集实例。")?;
-    let status = workspace.status.get(id);
-    Ok(json!({
-        "sequence": workspace.sequence,
-        "enabled": instance.enabled,
-        "settings": instance.settings,
-        "data": status.map(|status| &status.data),
-        "error": status.and_then(|status| status.error.as_deref()),
-        "action": workspace.interactions.get(id).map(|action| &action.name),
-    }))
+    workspace.instance_status(id)
 }
 
 fn suggest_binding(home: &Path, hint: &BindingHint) -> Option<String> {
@@ -452,7 +613,10 @@ pub(crate) fn configure_bundled(
     let instance = catalog.instances.get_mut(id).ok_or("找不到采集实例。")?;
     instance.enabled = enabled;
     if let Some(bindings) = bindings {
-        instance.settings = bindings;
+        instance.settings.retain(|alias, _| {
+            definition.settings.get(alias).is_some_and(Setting::is_variable)
+        });
+        instance.settings.extend(bindings);
         instance.approved_permissions = definition.permissions.clone();
     }
     workspace.save(catalog)?;
@@ -592,52 +756,13 @@ pub fn start(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let directory = app.path().app_config_dir()?;
     fs::create_dir_all(&directory)?;
     let path = directory.join("collectors.json");
-    let mut catalog: Catalog = match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Catalog::default(),
-        Err(error) => return Err(error.into()),
-    };
-    for project in builtin::projects() {
-        let id = &project.manifest.module_id;
-        let definition = &project.manifest.definition;
-        let schedule = definition
-            .schedule
-            .as_ref()
-            .expect("bundled collector schedule");
-        catalog.modules.insert(
-            id.clone(),
-            Module {
-                draft: Draft::from_project(project),
-                released: Some(Release {
-                    revision: 1,
-                    project: project.clone(),
-                }),
-                previous: None,
-            },
-        );
-        let instance = catalog
-            .instances
-            .entry(id.clone())
-            .or_insert_with(|| Instance {
-                id: id.clone(),
-                module_id: id.clone(),
-                name: definition.name.clone(),
-                settings: BTreeMap::new(),
-                approved_permissions: definition.permissions.clone(),
-                refresh_seconds: schedule.refresh_seconds,
-                enabled: schedule.enabled,
-            });
-        instance.refresh_seconds = schedule.refresh_seconds;
-        // Bundled paths stay as previously authorized. Updated grants require explicit reconfiguration.
-        if instance.approved_permissions != definition.permissions {
-            instance.enabled = false;
-        }
-    }
+    let workspace = Workspace::load(path)?;
     {
         let device = app.state::<Mutex<Device>>();
         let mut device = device.lock().map_err(|error| error.to_string())?;
-        for instance in catalog.instances.values() {
-            if let Some(release) = catalog
+        for instance in workspace.catalog.instances.values() {
+            if let Some(release) = workspace
+                .catalog
                 .modules
                 .get(&instance.module_id)
                 .and_then(|module| module.released.as_ref())
@@ -652,15 +777,7 @@ pub fn start(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    app.manage(Mutex::new(Workspace {
-        path,
-        catalog,
-        tested: BTreeMap::new(),
-        status: BTreeMap::new(),
-        interactions: BTreeMap::new(),
-        refresh: Default::default(),
-        sequence: 0,
-    }));
+    app.manage(Mutex::new(workspace));
     let app = app.clone();
     thread::spawn(move || poll_sources(app));
     Ok(())
@@ -872,13 +989,20 @@ fn plan_sources(
                 }
                 source.refresh_seconds = schedule.refresh_seconds;
                 source.enabled = schedule.enabled;
-            } else if let Some(previous) = &current {
+            }
+            if let Some(previous) = &current {
                 source.settings.extend(
                     previous_settings
                         .iter()
                         .filter(|(alias, _)| {
-                            previous.settings.contains_key(*alias)
-                                && definition.settings.contains_key(*alias)
+                            previous.settings.get(*alias).zip(definition.settings.get(*alias))
+                                .is_some_and(|(old, new)| {
+                                    if old.is_variable() || new.is_variable() {
+                                        old.is_variable() && new.is_variable()
+                                    } else {
+                                        definition.schedule.is_none()
+                                    }
+                                })
                         })
                         .map(|(alias, value)| (alias.clone(), value.clone())),
                 );
@@ -1300,6 +1424,14 @@ fn request(project: &Project, inputs: Value, sampled_at: u64) -> runner::Request
         entry: project.manifest.entry.clone(),
         files: project.files.clone(),
         inputs,
+        private_settings: project
+            .manifest
+            .definition
+            .settings
+            .iter()
+            .filter(|(_, setting)| setting.is_variable())
+            .map(|(key, _)| key.clone())
+            .collect(),
         sampled_at,
         action: None,
         state: Value::Null,
@@ -1735,6 +1867,218 @@ fn poll_sources(app: AppHandle) {
 mod tests {
     use super::*;
 
+    const VARIABLE_VALUE: &str = "不应出现在本机配置的变量";
+    const VARIABLE_KEY: &str = "collector-variables.key";
+
+    fn variable_catalog() -> (Catalog, String) {
+        let mut project = create_template("变量".into(), "sample")
+            .unwrap()
+            .project(false)
+            .unwrap();
+        project.manifest.definition.settings = serde_json::from_value(json!({
+            "API_TOKEN": { "label": "令牌", "description": "测试变量", "secret": true },
+            "PUBLIC_VALUE": { "label": "公开变量", "required": false },
+            "legacy_option": { "label": "历史参数" }
+        }))
+        .unwrap();
+        project.manifest.definition.permissions.insert(
+            "source".into(),
+            Permission::File {
+                label: "文件".into(),
+            },
+        );
+        project.files.insert(
+            project.manifest.entry.clone(),
+            r#"
+            export default { collect(settings) {
+                return { outputs: { reading: { value: settings.API_TOKEN.length } } };
+            }};
+        "#
+            .into(),
+        );
+        project.validate(false).unwrap();
+        let module_id = project.manifest.module_id.clone();
+        let id = format!("collector:{module_id}");
+        let instance = Instance {
+            id: id.clone(),
+            module_id: module_id.clone(),
+            name: "变量".into(),
+            settings: BTreeMap::from([
+                ("API_TOKEN".into(), VARIABLE_VALUE.into()),
+                ("PUBLIC_VALUE".into(), "test-public-variable".into()),
+                ("legacy_option".into(), "legacy-text".into()),
+                ("source".into(), "/path/to/authorized.json".into()),
+            ]),
+            approved_permissions: project.manifest.definition.permissions.clone(),
+            refresh_seconds: 60,
+            enabled: true,
+        };
+        let catalog = Catalog {
+            instances: BTreeMap::from([(id.clone(), instance)]),
+            modules: BTreeMap::from([(
+                module_id,
+                Module {
+                    draft: Draft::from_project(&project),
+                    released: Some(Release {
+                        revision: 1,
+                        project,
+                    }),
+                    previous: None,
+                },
+            )]),
+        };
+        (catalog, id)
+    }
+
+    #[test]
+    fn encrypted_variables_hide_values_and_reach_the_script_after_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("collectors.json");
+        let mut workspace = Workspace::load(path.clone()).unwrap();
+        let (catalog, id) = variable_catalog();
+        workspace.save(catalog).unwrap();
+
+        let status = workspace.instance_status(&id).unwrap();
+        assert!(!status.to_string().contains(VARIABLE_VALUE));
+        assert!(!status.to_string().contains("test-public-variable"));
+        assert_eq!(status["settings"]["legacy_option"], "legacy-text");
+        assert_eq!(status["settings"]["source"], "/path/to/authorized.json");
+        let bytes = fs::read_to_string(&path).unwrap();
+        assert!(!bytes.contains(VARIABLE_VALUE));
+        assert!(!bytes.contains("test-public-variable"));
+        let stored: Value = serde_json::from_str(&bytes).unwrap();
+        assert_eq!(
+            stored["instances"][&id]["settings"]["legacy_option"],
+            "legacy-text"
+        );
+        assert_eq!(
+            stored["instances"][&id]["settings"]["source"],
+            "/path/to/authorized.json"
+        );
+
+        let restarted = Workspace::load(path).unwrap();
+        let instance = &restarted.catalog.instances[&id];
+        let project = &restarted.catalog.modules[&instance.module_id]
+            .released
+            .as_ref()
+            .unwrap()
+            .project;
+        let settings = io::settings(&project.manifest.definition, &instance.settings).unwrap();
+        assert_eq!(settings["API_TOKEN"], VARIABLE_VALUE);
+        let result = runner::evaluate(request(project, settings, 1000))
+            .result
+            .unwrap();
+        assert_eq!(result.outputs["reading"]["value"], 12);
+    }
+
+    #[test]
+    fn encrypted_variables_migrate_legacy_plaintext_and_remove_deleted_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("collectors.json");
+        let (catalog, id) = variable_catalog();
+        fs::write(&path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+        let mut workspace = Workspace::load(path.clone()).unwrap();
+        assert_eq!(
+            workspace.catalog.instances[&id].settings["API_TOKEN"],
+            VARIABLE_VALUE
+        );
+        workspace.save(workspace.catalog.clone()).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains(VARIABLE_VALUE));
+
+        let mut restarted = Workspace::load(path.clone()).unwrap();
+        let mut next = restarted.catalog.clone();
+        let instance = next.instances.get_mut(&id).unwrap();
+        assert_eq!(instance.settings["API_TOKEN"], VARIABLE_VALUE);
+        instance.settings.remove("API_TOKEN");
+        restarted.save(next).unwrap();
+
+        let stored: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(stored["instances"][&id]["settings"]
+            .get("API_TOKEN")
+            .is_none());
+        let mut next = restarted.catalog.clone();
+        next.instances.remove(&id);
+        restarted.save(next).unwrap();
+        let stored: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(stored["instances"].get(&id).is_none());
+    }
+
+    #[test]
+    fn encrypted_variables_fail_closed_when_the_key_is_lost_or_changed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("collectors.json");
+        let key_path = directory.path().join(VARIABLE_KEY);
+        let mut workspace = Workspace::load(path.clone()).unwrap();
+        let (catalog, _) = variable_catalog();
+        workspace.save(catalog).unwrap();
+        let original = fs::read(&path).unwrap();
+        fs::remove_file(&key_path).unwrap();
+        assert!(Workspace::load(path.clone())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("密钥"));
+        assert!(workspace.save(workspace.catalog.clone()).is_err());
+        assert!(!key_path.exists());
+        assert_eq!(fs::read(&path).unwrap(), original);
+
+        for damaged in [vec![42; 15], vec![42; 32]] {
+            fs::write(&key_path, &damaged).unwrap();
+            let error = Workspace::load(path.clone()).err().unwrap().to_string();
+            assert!(error.contains("密钥"), "{error}");
+            assert!(!error.contains(VARIABLE_VALUE));
+            assert_eq!(fs::read(&key_path).unwrap(), damaged);
+            assert_eq!(fs::read(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn encrypted_variables_do_not_echo_in_script_status_errors_or_logs() {
+        let (catalog, id) = variable_catalog();
+        let instance = &catalog.instances[&id];
+        let mut project = catalog.modules[&instance.module_id]
+            .released
+            .as_ref()
+            .unwrap()
+            .project
+            .clone();
+        let settings = io::settings(&project.manifest.definition, &instance.settings).unwrap();
+        project.files.insert(
+            project.manifest.entry.clone(),
+            r#"
+            export default { collect(settings, context) {
+                context.log('a'.repeat(395) + settings.API_TOKEN);
+                context.log('ordinary diagnostic');
+                return { outputs: { reading: { value: 42 } },
+                    status: { [settings.API_TOKEN]: settings.PUBLIC_VALUE } };
+            }};
+        "#
+            .into(),
+        );
+        let response = runner::evaluate(request(&project, settings.clone(), 1000));
+        assert!(!response
+            .result
+            .unwrap()
+            .status
+            .to_string()
+            .contains(VARIABLE_VALUE));
+        assert!(!response.logs.join(" ").contains("不应出现在"));
+        assert!(response.logs.iter().any(|log| log == "ordinary diagnostic"));
+
+        project.files.insert(
+            project.manifest.entry.clone(),
+            r#"
+            export default { collect(settings) {
+                throw new Error('a'.repeat(2990) + settings.API_TOKEN);
+            }};
+        "#
+            .into(),
+        );
+        let response = runner::evaluate(request(&project, settings, 1000));
+        let error = response.error.unwrap();
+        assert!(!error.contains("不应出"));
+    }
+
     #[test]
     fn templates_assign_metadata_and_expose_only_author_fields() {
         let first = create_template("温度".into(), "http").unwrap();
@@ -1976,6 +2320,9 @@ mod tests {
             super::super::model::Setting {
                 label: "普通参数".into(),
                 default: "safe".into(),
+                description: None,
+                required: None,
+                secret: None,
             },
         );
         let plan = plan_sources(&after, Some(&before), &catalog, false).unwrap();

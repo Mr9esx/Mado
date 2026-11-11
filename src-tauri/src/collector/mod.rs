@@ -3,6 +3,7 @@ mod io;
 mod model;
 pub(crate) mod process;
 pub mod runner;
+mod vault;
 pub mod workspace;
 
 use crate::{

@@ -80,6 +80,33 @@ pub struct Setting {
     pub label: String,
     #[serde(default)]
     pub default: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<bool>,
+}
+
+impl Setting {
+    pub fn is_variable(&self) -> bool {
+        self.description.is_some() || self.required.is_some() || self.secret.is_some()
+    }
+
+    fn valid(&self, key: &str) -> bool {
+        key_valid(key)
+            && label_valid(&self.label)
+            && self.default.len() <= 4096
+            && (!self.is_variable()
+                || (key.as_bytes()[0].is_ascii_uppercase()
+                    && key.bytes().all(|byte| {
+                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                    })))
+            && self
+                .description
+                .as_ref()
+                .is_none_or(|text| !text.trim().is_empty() && text.chars().count() <= 512)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -354,10 +381,7 @@ impl Project {
             || definition.settings.len() > 12
             || definition.permissions.len() > 12
             || definition.settings.iter().any(|(key, setting)| {
-                !key_valid(key)
-                    || !label_valid(&setting.label)
-                    || setting.default.len() > 4096
-                    || definition.permissions.contains_key(key)
+                !setting.valid(key) || definition.permissions.contains_key(key)
             })
             || definition
                 .permissions
@@ -736,5 +760,71 @@ impl History {
             }
             Some((project.widget_id(source, key), payload))
         }).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project_with_settings(settings: Value) -> Project {
+        serde_json::from_value(json!({
+            "manifest": {
+                "moduleId": "example",
+                "sdkApiVersion": 2,
+                "entry": "entry.mjs",
+                "name": "采集器",
+                "settings": settings,
+                "outputs": { "reading": { "valueType": "number" } },
+                "widgets": {}
+            },
+            "files": { "entry.mjs": "" },
+            "fixture": {}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn variable_metadata_round_trips() {
+        let setting = json!({
+            "label": "令牌",
+            "description": "用于访问仓库",
+            "default": "",
+            "secret": true,
+            "required": false
+        });
+        let project = project_with_settings(json!({ "API_TOKEN2": setting }));
+        project.validate(false).unwrap();
+        let serialized = serde_json::to_value(&project).unwrap();
+        assert_eq!(serialized["manifest"]["settings"]["API_TOKEN2"], setting);
+    }
+
+    #[test]
+    fn variable_definitions_validate_metadata_and_names() {
+        for (key, setting) in [
+            ("lowercase", json!({ "label": "令牌", "required": false })),
+            ("API-Key", json!({ "label": "令牌", "secret": false })),
+            ("9TOKEN", json!({ "label": "令牌", "description": "说明" })),
+            ("TOKEN", json!({ "label": "  ", "description": "说明" })),
+            ("TOKEN", json!({ "label": "令牌", "description": "  " })),
+            (
+                "TOKEN",
+                json!({ "label": "令牌", "description": "字".repeat(513) }),
+            ),
+        ] {
+            assert!(
+                project_with_settings(json!({ (key): setting }))
+                    .validate(false)
+                    .is_err(),
+                "{key}: {setting}"
+            );
+        }
+        let legacy = json!({ "label": "旧参数", "default": "保留" });
+        let project = project_with_settings(json!({ "legacy_option": legacy }));
+        project.validate(false).unwrap();
+        assert_eq!(
+            serde_json::to_value(&project).unwrap()["manifest"]["settings"]["legacy_option"],
+            legacy
+        );
     }
 }
