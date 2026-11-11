@@ -124,6 +124,8 @@ idf.py -C firmware -p /dev/cu.usbmodem2101 flash
 python -m esptool --chip esp32c5 --port /dev/cu.usbmodem2101 write_flash 0x990000 firmware/assets/fonts.bin
 ```
 
+已存在旧 `firmware/sdkconfig` 时，使用新的 SDK 配置文件构建，确保应用 `sdkconfig.defaults` 中的 NimBLE、Wi-Fi 和内存设置。例如 `idf.py -C firmware -B /tmp/mado-wifi-build -D SDKCONFIG=/tmp/mado-wifi.sdkconfig build`。烧录时沿用同一构建目录和配置参数。
+
 初次烧录前可用 `read_flash 0x0 0x1000000 <备份路径>` 备份出厂 Flash。后续仅更新应用使用 `idf.py -C firmware -p <串口> app-flash`，保留配置与字库。更新字库时单独写字体分区。App 和协议读取通过 USB，应用日志默认通过 UART。
 
 ## 实板验收
@@ -137,6 +139,10 @@ clang++ -std=c++17 firmware/tests/presentation_test.cpp -o /tmp/tdisplay-present
 实板脚本占用设备串口并应用测试布局。运行前断开 Studio 的 USB 连接。脚本验证握手、版本、完整快照、无效帧拒绝、幂等、亮度、切页、超时保留与重启恢复。重新连接 Studio 后自动同步其已应用布局。
 
 已确认 ESP32-C5 v1.2、16 MiB Flash、8 MiB PSRAM。Studio 的实际 Codex 读数已通过 USB 接收确认，设备 RGB565 缓冲已通过 JTAG 读回。实机压力测试应用 5 页 40 卡、接收 36,280 字节读数、切页和响应心跳，共用时约 1.92 秒。断线保留使用 15 秒心跳超时模拟，重启通过 USB 复位验证。物理屏的色彩与动画逐项校准、纯电池场景及长时间内存和性能测量仍待复核。
+
+2026-11-11 在同一开发板和 macOS Studio 实测 BLE 扫描、六位码配对、布局与实时读数同步、已绑定免码连接。USB 与 BLE 之间可以切换，BLE 在线时 USB 握手收到 `SESSION_BUSY`。复位开发板后，Studio 自动重新扫描并恢复同步。40 卡的 BLE 最大帧吞吐尚待测量。
+
+同日验证了 Wi-Fi 版固件可从 USB 接受配网、启动无线扫描，并在找不到网络时返回 `NETWORK_NOT_FOUND`，不会保存失败配置。USB 握手和关闭会话在扫描后通过。双向 TLS 的身份校验由 Rust 本机测试覆盖。真实路由器上的 DHCP、mDNS 和 Wi-Fi 显示同步还需实测。
 
 - 应用镜像装入 4.75 MiB；字库、索引及生成开销装入字库分区。
 - 同时测量解码峰值、常驻分片、字形缓存、LVGL、显示缓冲和通信缓冲，留出运行余量。

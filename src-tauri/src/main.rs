@@ -6,7 +6,9 @@ mod collector;
 mod desktop_widget;
 mod device;
 mod display_wire;
-mod usb_display;
+mod ble_display;
+mod wifi_display;
+mod display_connection;
 
 use device::{Device, DisplayPage, DisplayTheme, LayoutItem, PowerStatus};
 use std::{
@@ -113,7 +115,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Mutex::new(Device::new(power)))
-        .manage(usb_display::UsbDisplay::default())
+        .manage(display_connection::DisplayConnection::default())
         .setup(|app| {
             appearance::start(app.handle())?;
             desktop_widget::start(app.handle())?;
@@ -134,13 +136,18 @@ fn main() {
             appearance::get_appearance,
             appearance::update_appearance,
             get_snapshot,
-            usb_display::list_usb_displays,
-            usb_display::get_usb_display_status,
-            usb_display::connect_usb_display,
-            usb_display::disconnect_usb_display,
-            usb_display::select_usb_display_page,
-            usb_display::set_usb_display_brightness,
-            usb_display::set_usb_display_rotation,
+            display_connection::list_usb_displays,
+            display_connection::get_display_connection_status,
+            display_connection::connect_usb_display,
+            ble_display::scan_ble_displays,
+            display_connection::connect_ble_display,
+            display_connection::scan_wifi_displays,
+            display_connection::connect_wifi_display,
+            display_connection::provision_wifi_display,
+            display_connection::disconnect_display,
+            display_connection::select_display_page,
+            display_connection::set_display_brightness,
+            display_connection::set_display_rotation,
             sync_layout,
             apply_pages,
             select_page,

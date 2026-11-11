@@ -1,6 +1,7 @@
 #include "protocol.h"
+#include "wifi_network.h"
 
-#include "driver/usb_serial_jtag.h"
+#include "esp_heap_caps.h"
 #include "esp_mac.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <set>
@@ -50,6 +52,8 @@ Json config = own(nullptr);
 Json readings = own(nullptr);
 std::string page;
 std::string session;
+const DisplayTransport *owner;
+const DisplayTransport *recipient;
 std::string last_request;
 std::string last_response;
 std::string welcome_response;
@@ -97,10 +101,7 @@ bool save_screen_rotation(bool value) {
 uint64_t monotonic_ms() { return esp_timer_get_time() / 1000; }
 uint64_t wall_ms() { return clock_unix ? clock_unix + monotonic_ms() - clock_at : 0; }
 void send(const std::string &wire) {
-    if (!wire.empty()) {
-        // 协议帧独占 USB，固件日志走 UART。
-        usb_serial_jtag_write_bytes(wire.data(), wire.size(), pdMS_TO_TICKS(20));
-    }
+    if (recipient && !wire.empty()) recipient->send(wire);
 }
 std::string envelope(const char *type, cJSON *payload, bool use_session = true) {
     auto obj = own(cJSON_CreateObject());
@@ -128,6 +129,8 @@ std::string result(uint64_t id, const char *error, cJSON *data = nullptr, bool u
 }
 void status() {
     if (session.empty()) return;
+    auto previous = recipient;
+    recipient = owner;
     auto *p = cJSON_CreateObject();
     cJSON_AddNumberToObject(p, "statusSequence", ++status_sequence);
     cJSON_AddNumberToObject(p, "configRevision", revision);
@@ -135,7 +138,7 @@ void status() {
     else cJSON_AddStringToObject(p, "activePageId", page.c_str());
     cJSON_AddNumberToObject(p, "brightnessPercent", brightness);
     cJSON_AddBoolToObject(p, "screenRotated", screen_rotated);
-    cJSON_AddStringToObject(p, "transport", "usb");
+    cJSON_AddStringToObject(p, "transport", owner->name);
     cJSON_AddNullToObject(p, "appVersion");
     auto *power = cJSON_AddObjectToObject(p, "power");
     cJSON_AddStringToObject(power, "source", !power_known ? "unknown" : external ? "external" : "battery");
@@ -151,6 +154,7 @@ void status() {
     else cJSON_AddNullToObject(p, "lastReadingsAppliedAtUnixMs");
     send(envelope("device.status", p));
     status_at = monotonic_ms();
+    recipient = previous;
 }
 bool valid_render(const cJSON *r) {
     if (!cJSON_IsObject(r) || !text(field(r, "label"), 1, 128)) return false;
@@ -358,7 +362,7 @@ void select_page(const char *id) {
 }
 void hello(const cJSON *request, const char *line) {
     if (u64(request, "id") != 1 || !cJSON_IsNull(field(request, "sessionId"))) return;
-    if (!session.empty() && hello_request == line) {
+    if (!session.empty() && owner == recipient && hello_request == line) {
         active_at = monotonic_ms();
         send(welcome_response);
         return;
@@ -385,6 +389,7 @@ void hello(const cJSON *request, const char *line) {
     snprintf(new_id, sizeof(new_id), "%08lx%08lx", static_cast<unsigned long>(esp_random()),
              static_cast<unsigned long>(esp_random()));
     session = new_id;
+    owner = recipient;
     active_at = monotonic_ms();
     received_id = 1;
     sent_id = sequence = status_sequence = 0;
@@ -393,7 +398,7 @@ void hello(const cJSON *request, const char *line) {
     last_request.clear();
     last_response.clear();
     hello_request = line;
-    auto payload = own(cJSON_Parse(R"({"replyTo":1,"profileId":"tdisplay-c5-v1","capabilities":{"maxPages":5,"columns":4,"rows":2,"maxMessageBytes":65536,"maxChartPoints":12,"maxDetailBytes":1024,"supportedSpans":[{"w":1,"h":1},{"w":2,"h":1},{"w":2,"h":2},{"w":4,"h":1}],"kinds":["metric","progress","state","chart","trend","range"],"numberAnimations":["none","count","digitRoll"],"settings":["brightnessPercent","screenRotated"]}})"));
+    auto payload = own(cJSON_Parse(R"({"replyTo":1,"profileId":"tdisplay-c5-v1","capabilities":{"maxPages":5,"columns":4,"rows":2,"maxMessageBytes":65536,"maxChartPoints":12,"maxDetailBytes":1024,"supportedSpans":[{"w":1,"h":1},{"w":2,"h":1},{"w":2,"h":2},{"w":4,"h":1}],"kinds":["metric","progress","state","chart","trend","range"],"numberAnimations":["none","count","digitRoll"],"settings":["brightnessPercent","screenRotated"],"wifiProvisioning":true}})"));
     cJSON_AddStringToObject(payload.get(), "firmwareVersion", firmware_version);
     cJSON_AddStringToObject(payload.get(), "deviceId", device_id);
     cJSON_AddStringToObject(payload.get(), "bootId", boot_id);
@@ -403,6 +408,12 @@ void hello(const cJSON *request, const char *line) {
     status();
 }
 std::string execute(const char *type, const cJSON *p, uint64_t id, bool &changed) {
+    if (is(type, "wifi.provision") || is(type, "wifi.status")) {
+        if (is(owner->name, "wifi")) return result(id, "LOCAL_LINK_REQUIRED");
+        if (is(type, "wifi.status")) return result(id, nullptr, wifi::provision_status());
+        const char *error = wifi::provision(p);
+        return result(id, error, error ? nullptr : wifi::provision_status());
+    }
     if (is(type, "ping")) {
         auto *data = cJSON_CreateObject();
         cJSON_AddNumberToObject(data, "uptimeMs", monotonic_ms());
@@ -534,6 +545,12 @@ bool reasonable_nesting(const char *line) {
 }
 
 void protocol_init() {
+    // JSON frames and retained readings can outgrow the internal memory left by both radios.
+    cJSON_Hooks json_memory{
+        [](size_t size) { return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); },
+        free,
+    };
+    cJSON_InitHooks(&json_memory);
     ESP_ERROR_CHECK(nvs_flash_init_partition("displaycfg"));
     ESP_ERROR_CHECK(nvs_open_from_partition("displaycfg", "display", NVS_READWRITE, &store));
     uint8_t saved_brightness;
@@ -562,7 +579,9 @@ void protocol_init() {
              static_cast<unsigned long>(esp_random()));
 }
 
-void protocol_receive(const char *line) {
+const char *protocol_device_id() { return device_id; }
+
+static void receive(const char *line) {
     if (!reasonable_nesting(line)) return;
     auto request = own(cJSON_ParseWithOpts(line, nullptr, true));
     auto r = request.get();
@@ -577,11 +596,16 @@ void protocol_receive(const char *line) {
         hello(r, line);
         return;
     }
-    if (session.empty() || session != str(r, "sessionId")) {
+    if (session.empty() || owner != recipient || session != str(r, "sessionId")) {
         send(result(id, "INVALID_SESSION", nullptr, false));
         return;
     }
     active_at = monotonic_ms();
+    if (is(type, "session.close") && id > received_id && cJSON_IsObject(field(r, "payload"))) {
+        send(result(id, nullptr));
+        protocol_disconnect(*owner);
+        return;
+    }
     if (id == received_id && !last_response.empty()) {
         if (last_request == line) send(last_response);
         else {
@@ -605,6 +629,23 @@ void protocol_receive(const char *line) {
     if (changed) status();
 }
 
+void protocol_receive(const DisplayTransport &transport, const char *line) {
+    recipient = &transport;
+    receive(line);
+    recipient = nullptr;
+}
+
+void protocol_transport_progress(const DisplayTransport &transport) {
+    if (owner == &transport && !session.empty()) active_at = monotonic_ms();
+}
+
+void protocol_disconnect(const DisplayTransport &transport) {
+    if (owner != &transport) return;
+    session.clear();
+    await_snapshot = true;
+    owner = nullptr;
+}
+
 void protocol_power(int percent, bool known, bool has_external, bool is_charging) {
     if (power_known == known && battery == percent && external == has_external && charging == is_charging) return;
     battery = percent;
@@ -626,8 +667,7 @@ void protocol_next_page() {
 void protocol_tick(bool pause_rotation) {
     auto now = monotonic_ms();
     if (!session.empty() && now - active_at >= 15000) {
-        session.clear();
-        await_snapshot = true;
+        protocol_disconnect(*owner);
     }
     if (!session.empty() && now - status_at >= 5000) status();
     auto rotation = u64(field(config.get(), "playback"), "rotationSeconds");
@@ -637,7 +677,7 @@ void protocol_tick(bool pause_rotation) {
 
 DisplayState protocol_state() {
     return {config.get(), readings.get(), page.c_str(), error_message.c_str(), readings_at, wall_ms(), revision,
-            generation, snapshot, utc_offset, battery, power_known, external, charging, !session.empty()};
+            generation, snapshot, utc_offset, battery, power_known, external, charging, !session.empty(), session.empty() ? nullptr : owner->name};
 }
 
 unsigned protocol_brightness() { return brightness; }

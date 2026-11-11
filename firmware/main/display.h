@@ -21,6 +21,7 @@ struct DisplayState {
     bool external;
     bool charging;
     bool connected;
+    const char *transport;
 };
 
 void display_init(unsigned brightness, bool rotated);

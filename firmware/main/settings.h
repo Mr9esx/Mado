@@ -5,8 +5,8 @@
 
 namespace settings {
 enum class Press { none, tap, hold };
-enum class View { dashboard, menu, brightness, about };
-enum class Action { none, next_page, save, toggle_rotation };
+enum class View { dashboard, menu, brightness, about, bluetooth, wifi };
+enum class Action { none, next_page, save, toggle_rotation, open_pairing, close_pairing, forget_bluetooth, forget_wifi };
 
 class Button {
 public:
@@ -44,6 +44,7 @@ struct Menu {
     unsigned selected = 0;
     unsigned brightness = 0;
     bool save_failed = false;
+    bool forget_selected = false;
 
     bool active() const { return view != View::dashboard; }
 
@@ -62,7 +63,7 @@ struct Menu {
                 return Action::next_page;
             }
         } else if (view == View::menu) {
-            if (boot == Press::hold || (boot == Press::tap && selected == 3)) {
+            if (boot == Press::hold || (boot == Press::tap && selected == 5)) {
                 view = View::dashboard;
             } else if (boot == Press::tap) {
                 if (selected == 0) {
@@ -71,11 +72,18 @@ struct Menu {
                     view = View::brightness;
                 } else if (selected == 1) {
                     return Action::toggle_rotation;
+                } else if (selected == 3) {
+                    forget_selected = false;
+                    view = View::bluetooth;
+                    return Action::open_pairing;
+                } else if (selected == 4) {
+                    forget_selected = false;
+                    view = View::wifi;
                 } else {
                     view = View::about;
                 }
             } else if (user == Press::tap) {
-                selected = (selected + 1) % 4;
+                selected = (selected + 1) % 6;
                 save_failed = false;
             }
         } else if (view == View::brightness) {
@@ -88,6 +96,26 @@ struct Menu {
                 else if (brightness > 10) brightness = std::max(10u, brightness - 10);
                 edited = brightness != current;
                 save_failed = false;
+            }
+        } else if (view == View::bluetooth) {
+            if (boot == Press::hold) {
+                view = View::menu;
+                return Action::close_pairing;
+            }
+            if (user == Press::tap) forget_selected = !forget_selected;
+            if (boot == Press::tap) {
+                if (forget_selected) {
+                    forget_selected = false;
+                    return Action::forget_bluetooth;
+                }
+                return Action::open_pairing;
+            }
+        } else if (view == View::wifi) {
+            if (boot == Press::hold) view = View::menu;
+            else if (user == Press::tap) forget_selected = !forget_selected;
+            else if (boot == Press::tap && forget_selected) {
+                forget_selected = false;
+                return Action::forget_wifi;
             }
         } else if (boot != Press::none) {
             view = View::menu;

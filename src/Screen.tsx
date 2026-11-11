@@ -76,7 +76,7 @@ export function Screen({
 
   return (
     <div className={`screen${onCardPointerDown ? ' is-editable' : ''}`} data-display-theme={themeName} style={geometry} aria-label={`${display.width} × ${display.height} 显示画面`}>
-      {connectionFailed ? <ConnectionFailure reason={connection?.reason ?? '连接超时，请检查电脑端服务及 USB 数据线。'} />
+      {connectionFailed ? <ConnectionFailure reason={connection?.reason ?? '连接超时，请检查 Studio 和设备的连接状态。'} />
         : message ? <div className="screen-message">{message}</div> : <div className="screen-grid" ref={gridRef}>
         {Array.from({ length: display.columns * display.rows }, (_, index) => (
           <div

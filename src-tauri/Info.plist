@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Mado Studio 通过蓝牙连接你的 Mado 屏幕，并同步布局和读数。</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Mado Studio 在局域网内查找并连接你的 Mado 屏幕。</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_mado._tcp</string>
+  </array>
+</dict>
+</plist>

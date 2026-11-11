@@ -2,15 +2,15 @@ import { RotateCw, Sun } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from './components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from './components/reui/color-picker-primitives'
-import type { useUsbDevice } from './usbDevice'
+import type { useDisplayConnection } from './displayConnection'
 
-export function DeviceScreenControls({ usb }: { usb: ReturnType<typeof useUsbDevice> }) {
+export function DeviceScreenControls({ device }: { device: ReturnType<typeof useDisplayConnection> }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [brightnessDraft, setBrightnessDraft] = useState<number>()
-  const connected = usb.status?.phase === 'connected'
-  const rotated = connected ? usb.status?.screenRotated : undefined
-  const confirmedBrightness = connected ? usb.status?.brightness : undefined
+  const connected = device.status?.phase === 'connected'
+  const rotated = connected ? device.status?.screenRotated : undefined
+  const confirmedBrightness = connected ? device.status?.brightness : undefined
   const brightness = brightnessDraft ?? confirmedBrightness ?? 70
 
   async function apply(command: () => Promise<void>) {
@@ -37,12 +37,12 @@ export function DeviceScreenControls({ usb }: { usb: ReturnType<typeof useUsbDev
       <PopoverContent align="end" className="w-56" aria-label="设备方向">
         <p className="mb-2 text-xs font-semibold">设备方向</p>
         {rotated == null
-          ? <p className="text-xs text-muted-foreground">{connected ? '当前固件未提供方向切换。' : '通过 USB 连接设备后可切换方向。'}</p>
+          ? <p className="text-xs text-muted-foreground">{connected ? '当前固件未提供方向切换。' : '连接设备后可切换方向。'}</p>
           : <div className="flex gap-2" role="group" aria-label="实体屏幕方向" aria-busy={busy}>
             <Button size="xs" type="button" variant={rotated ? 'outline' : 'secondary'} aria-pressed={!rotated}
-              disabled={busy} onClick={() => { if (rotated) void apply(() => usb.setRotation(false)) }}>正向 0°</Button>
+              disabled={busy} onClick={() => { if (rotated) void apply(() => device.setRotation(false)) }}>正向 0°</Button>
             <Button size="xs" type="button" variant={rotated ? 'secondary' : 'outline'} aria-pressed={rotated}
-              disabled={busy} onClick={() => { if (!rotated) void apply(() => usb.setRotation(true)) }}>反向 180°</Button>
+              disabled={busy} onClick={() => { if (!rotated) void apply(() => device.setRotation(true)) }}>反向 180°</Button>
           </div>}
         {error && <p className="page-error" role="alert">{error}</p>}
       </PopoverContent>
@@ -68,8 +68,8 @@ export function DeviceScreenControls({ usb }: { usb: ReturnType<typeof useUsbDev
             <span className="w-10 text-right text-xs tabular-nums">{brightness}%</span>
           </div>
           <Button size="xs" type="button" variant="outline" className="justify-self-end"
-            disabled={brightness === confirmedBrightness} onClick={() => void apply(() => usb.setBrightness(brightness))}>应用亮度</Button>
-        </fieldset> : <p className="text-xs text-muted-foreground">通过 USB 连接设备后可调整背光。</p>}
+            disabled={brightness === confirmedBrightness} onClick={() => void apply(() => device.setBrightness(brightness))}>应用亮度</Button>
+        </fieldset> : <p className="text-xs text-muted-foreground">连接设备后可调整背光。</p>}
         {error && <p className="page-error" role="alert">{error}</p>}
       </PopoverContent>
     </Popover>

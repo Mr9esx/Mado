@@ -47,6 +47,22 @@ int main() {
     assert(menu.view == View::menu);
     menu.update(Press::tap, Press::none, 60);
     menu.update(Press::none, Press::tap, 60);
+    assert(menu.view == View::bluetooth);
+    assert(menu.update(Press::tap, Press::none, 60) == Action::none);
+    assert(menu.forget_selected);
+    assert(menu.update(Press::none, Press::tap, 60) == Action::forget_bluetooth);
+    assert(menu.update(Press::none, Press::hold, 60) == Action::close_pairing);
+    assert(menu.view == View::menu);
+    menu.update(Press::tap, Press::none, 60);
+    menu.update(Press::none, Press::tap, 60);
+    assert(menu.view == View::wifi);
+    assert(menu.update(Press::tap, Press::none, 60) == Action::none);
+    assert(menu.forget_selected);
+    assert(menu.update(Press::none, Press::tap, 60) == Action::forget_wifi);
+    menu.update(Press::none, Press::hold, 60);
+    assert(menu.view == View::menu);
+    menu.update(Press::tap, Press::none, 60);
+    menu.update(Press::none, Press::tap, 60);
     assert(menu.view == View::dashboard);
 
     menu.update(Press::none, Press::hold, 0);

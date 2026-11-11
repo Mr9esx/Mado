@@ -1,4 +1,9 @@
 #include "display.h"
+#include "ble_display.h"
+#include "wifi_display.h"
+#include "wifi_network.h"
+#include "frame.h"
+#include "esp_log.h"
 #include "protocol.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -14,6 +19,9 @@
 namespace {
 i2c_master_dev_handle_t bmu;
 settings::Menu device_menu;
+const DisplayTransport usb_transport{"usb", [](std::string_view wire) {
+    usb_serial_jtag_write_bytes(wire.data(), wire.size(), pdMS_TO_TICKS(20));
+}};
 constexpr auto user_pin = GPIO_NUM_0, boot_pin = GPIO_NUM_28;
 
 struct KeyEvent {
@@ -96,29 +104,30 @@ extern "C" void app_main() {
     // 等待本地字形与首帧合成，USB 连接和实时读数不参与启动门槛。
     display_prepare(protocol_state());
     display_draw(protocol_state(), device_menu, protocol_brightness(), protocol_screen_rotated());
-    size_t size = 0;
-    bool overflow = false;
+    if (!ble_display_init()) ESP_LOGW("mado", "BLE initialization failed");
+    if (wifi_display_init()) wifi::init(protocol_device_id());
+    else ESP_LOGW("mado", "Wi-Fi display initialization failed");
+    LineFrame usb_frame(line, message_limit);
+    bool usb_was_connected = false;
     uint64_t last_power = 0;
     constexpr uint64_t frame_us = 16667;
     uint64_t next_frame = esp_timer_get_time() + frame_us;
     for (;;) {
         uint8_t buffer[1024];
         int count = usb_serial_jtag_read_bytes(buffer, sizeof(buffer), pdMS_TO_TICKS(1));
-        for (int i = 0; i < count; ++i) {
-            if (buffer[i] == '\n') {
-                if (!overflow && size > 0) {
-                    line[size] = '\0';
-                    protocol_receive(line);
-                }
-                size = 0;
-                overflow = false;
-            } else if (!overflow) {
-                if (size == message_limit || buffer[i] == 0) overflow = true;
-                else line[size++] = buffer[i];
-            }
+        const bool usb_connected = usb_serial_jtag_is_connected();
+        if (usb_was_connected && !usb_connected) {
+            usb_frame.reset();
+            protocol_disconnect(usb_transport);
         }
+        usb_was_connected = usb_connected;
+        for (int i = 0; i < count; ++i) {
+            if (const char *frame = usb_frame.push(buffer[i])) protocol_receive(usb_transport, frame);
+        }
+        ble_display_poll();
+        wifi_display_poll();
         // USB 连续到达时先读完串口，避免冷字体解码阻塞接收。
-        if (count > 0 && (size != 0 || overflow)) continue;
+        if (count > 0 && usb_frame.pending()) continue;
         uint64_t now = esp_timer_get_time() / 1000;
         KeyEvent event;
         while (xQueueReceive(keys.events, &event, 0) == pdTRUE) {
@@ -128,6 +137,10 @@ extern "C" void app_main() {
             if (action == settings::Action::next_page) protocol_next_page();
             if (action == settings::Action::save)
                 device_menu.saved(protocol_save_brightness(device_menu.brightness));
+            if (action == settings::Action::open_pairing) ble_pair_open();
+            if (action == settings::Action::close_pairing) ble_pair_close();
+            if (action == settings::Action::forget_bluetooth) ble_forget_peers();
+            if (action == settings::Action::forget_wifi) device_menu.save_failed = !wifi::forget();
             if (action == settings::Action::toggle_rotation)
                 device_menu.save_failed = !protocol_save_screen_rotation(!protocol_screen_rotated());
         }

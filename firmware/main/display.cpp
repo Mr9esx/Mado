@@ -1,4 +1,6 @@
 #include "display.h"
+#include "ble_display.h"
+#include "wifi_network.h"
 #include "font.h"
 #include "presentation.h"
 #include "../assets/brand_logo.h"
@@ -339,7 +341,7 @@ void status_bar(const DisplayState &state, const Palette &p) {
     for (i = 0; i < dots; ++i)
         box({12, top + i * 3, 2, 2}, i == page ? p.text : mix(p.surface, p.text, 71));
     const char *connection = !state.config && *state.error ? "attention"
-        : state.connected ? "usb" : state.config ? "link-break" : "loading-four";
+        : state.connected ? (is(state.transport, "ble") ? "bluetooth" : state.transport) : state.config ? "link-break" : "loading-four";
     int power_x;
     if (!state.power_known) {
         power_x = 308 - measure("—", 12);
@@ -411,7 +413,9 @@ void settings_panel(const DisplayState &state, const Palette &p, const settings:
     box({4, 4, 312, 132}, p.surface);
     box(status_bounds, p.surface);
     const auto heading = menu.view == View::menu ? "设备设置"
-                       : menu.view == View::brightness ? "屏幕亮度" : "设备信息";
+                       : menu.view == View::brightness ? "屏幕亮度"
+                       : menu.view == View::bluetooth ? "蓝牙配对"
+                       : menu.view == View::wifi ? "Wi-Fi" : "设备信息";
     draw_text({12, 12, 296, 22}, 12, 12, heading, 20, p.text);
     auto right = [&](int y, const char *value, int size, Color color, bool bold = false) {
         draw_text({12, y, 288, size + 2}, 300 - measure(value, size, bold), y, value, size, color, bold);
@@ -420,16 +424,16 @@ void settings_panel(const DisplayState &state, const Palette &p, const settings:
         draw_text({12, y, 296, 12}, (width - measure(label, 11)) / 2, y, label, 11, p.text);
     };
     if (menu.view == View::menu) {
-        const char *items[] = {"屏幕亮度", "屏幕反转", "设备信息", "返回仪表盘"};
+        const char *items[] = {"屏幕亮度", "屏幕反转", "设备信息", "蓝牙配对", "Wi-Fi", "返回仪表盘"};
         char percent[16];
         snprintf(percent, sizeof(percent), "%u%%", brightness);
-        const char *values[] = {percent, rotated ? "开启" : "关闭", ">", ""};
-        for (unsigned i = 0; i < 4; ++i) {
-            const int y = 40 + 24 * i;
+        const char *values[] = {percent, rotated ? "开启" : "关闭", ">", ">", ">", ""};
+        for (unsigned i = 0; i < 6; ++i) {
+            const int y = 32 + 17 * i;
             const bool selected = menu.selected == i;
             Color ink = selected ? p.background : p.text;
-            box({12, y, 296, 20}, selected ? p.text : p.background);
-            draw_text({20, y + 2, 220, 16}, 20, y + 2, items[i], 14, ink);
+            box({12, y, 296, 16}, selected ? p.text : p.background);
+            draw_text({20, y + 1, 220, 15}, 20, y + 1, items[i], 13, ink);
             right(y + 3, values[i], 13, ink);
         }
         footer(status_center - 12, "用户键 选择    BOOT 确认");
@@ -444,12 +448,45 @@ void settings_panel(const DisplayState &state, const Palette &p, const settings:
         right(97, "100%", 11, p.text);
         footer(status_center - 12, "用户键 -10%    BOOT +10%");
         footer(status_center, menu.save_failed ? "保存失败，长按 BOOT 重试" : "长按 BOOT 保存返回");
+    } else if (menu.view == View::bluetooth) {
+        int code = ble_pair_code();
+        if (menu.forget_selected) {
+            draw_text({12, 48, 296, 24}, 12, 48, "清除已配对电脑？", 20, p.text);
+            footer(status_center - 12, "用户键 取消    BOOT 确认");
+        } else if (code >= 0) {
+            char passkey[12];
+            snprintf(passkey, sizeof(passkey), "%06d", code);
+            right(43, passkey, 32, p.text, true);
+            draw_text({12, 85, 296, 18}, 12, 85, "在 Mado Studio 连接并输入配对码", 14, p.text);
+            footer(status_center - 12, "用户键 忘记电脑");
+        } else {
+            draw_text({12, 48, 296, 24}, 12, 48, ble_display_connected() ? "蓝牙已配对" : "配对窗口已关闭", 20, p.text);
+            footer(status_center - 12, "用户键 忘记电脑    BOOT 开始配对");
+        }
+        footer(status_center, "长按 BOOT 返回");
+    } else if (menu.view == View::wifi) {
+        const auto ip = wifi::address();
+        if (menu.forget_selected) {
+            draw_text({12, 48, 296, 24}, 12, 48, "忘记已保存的网络？", 20, p.text);
+            footer(status_center - 12, "用户键 取消    BOOT 确认");
+        } else if (!ip.empty()) {
+            draw_text({12, 43, 296, 20}, 12, 43, "设备 IP", 14, p.text);
+            draw_text({12, 70, 296, 28}, 12, 70, ip.c_str(), 22, p.text);
+            footer(status_center - 12, "用户键 忘记网络");
+        } else if (wifi::has_saved_network()) {
+            draw_text({12, 48, 296, 24}, 12, 48, "等待接入网络", 20, p.text);
+            footer(status_center - 12, menu.save_failed ? "暂时无法忘记网络" : "用户键 忘记网络");
+        } else {
+            draw_text({12, 48, 296, 24}, 12, 48, "在 Studio 配置 Wi-Fi", 18, p.text);
+            footer(status_center - 12, "通过蓝牙或 USB 连接");
+        }
+        footer(status_center, "长按 BOOT 返回");
     } else {
         char version[24], battery_text[16] = "—";
         snprintf(version, sizeof(version), "v%s", firmware_version);
         if (state.battery >= 0) snprintf(battery_text, sizeof(battery_text), "%d%%", state.battery);
         const char *labels[] = {"型号", "固件", "连接", "电池"};
-        const char *values[] = {"T-Display-C5 V1.0", version, state.connected ? "USB 已连接" : "未连接", battery_text};
+        const char *values[] = {"T-Display-C5 V1.0", version, state.connected ? (is(state.transport, "ble") ? "蓝牙已连接" : is(state.transport, "wifi") ? "Wi-Fi 已连接" : "USB 已连接") : "未连接", battery_text};
         for (int i = 0; i < 4; ++i) {
             int y = 42 + i * 20;
             draw_text({12, y, 88, 16}, 12, y, labels[i], 13, p.text);

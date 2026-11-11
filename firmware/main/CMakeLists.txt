@@ -1,6 +1,6 @@
-idf_component_register(SRCS "main.cpp" "protocol.cpp" "display.cpp" "font.cpp"
+idf_component_register(SRCS "main.cpp" "protocol.cpp" "display.cpp" "font.cpp" "ble_display.cpp" "wifi_display.cpp" "wifi_network.cpp"
     INCLUDE_DIRS "."
-    REQUIRES esp_partition json nvs_flash esp_timer esp_lcd esp_driver_gpio esp_driver_i2c
+    REQUIRES bt esp_wifi esp_event esp_netif esp-tls lwip esp_partition json nvs_flash esp_timer esp_lcd esp_driver_gpio esp_driver_i2c
              esp_driver_spi esp_driver_ledc esp_driver_usb_serial_jtag)
 target_compile_features(${COMPONENT_LIB} PRIVATE cxx_std_17)
 

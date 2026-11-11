@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, ChevronDown, CircleAlert, Monitor, Plus, RefreshCw, Settings2, Terminal, Undo2, Usb } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, CircleAlert, Monitor, Plus, RefreshCw, Settings2, Terminal, Undo2, Bluetooth, Usb, Wifi } from 'lucide-react'
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { openDesktopWidget, applyPages, useDevice } from './device'
@@ -18,8 +18,8 @@ import { ScreenAppearance } from './ScreenAppearance'
 import { useCardPlayback } from './useCardPlayback'
 import { useAppearance } from './appearance'
 import { openCollectors } from './collectorApi'
-import { useUsbDevice } from './usbDevice'
-import { UsbSettings } from './UsbSettings'
+import { useDisplayConnection } from './displayConnection'
+import { DisplayConnectionDialog } from './DisplayConnectionDialog'
 
 type Drag = {
   pointer: number
@@ -48,14 +48,14 @@ const arrowOffsets: Record<string, [number, number]> = {
 
 export function Editor() {
   const { snapshot, receive } = useDevice()
-  const usb = useUsbDevice()
+  const device = useDisplayConnection()
   const { appearance } = useAppearance()
   const { status: codexStatus, error: sourceError } = useCodexStatus()
   const [showSettings, setShowSettings] = useState<'device' | 'codex' | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set<string>())
   const [history, setHistory] = useState<LayoutHistory | null>(null)
   const [pageManagerKey, setPageManagerKey] = useState(0)
-  const [showUsb, setShowUsb] = useState(false)
+  const [showDevice, setShowDevice] = useState(false)
   const [pushInterval, setPushInterval] = useState(1000)
   const [selectedPageId, setSelectedPageId] = useState('')
   const [selectedId, select] = useState('')
@@ -269,7 +269,7 @@ export function Editor() {
     <main className="studio studio-editor" aria-label="布局编辑器" onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={clearDrag} onLostPointerCapture={clearDrag}
       onKeyDown={(event) => {
         if (event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing
-          && !showSettings && !showUsb && event.currentTarget.contains(event.target as Node)) {
+          && !showSettings && !showDevice && event.currentTarget.contains(event.target as Node)) {
           clearDrag()
           select('')
         }
@@ -287,10 +287,15 @@ export function Editor() {
             {collectorError ? <CircleAlert size={15} /> : <Terminal size={15} />}采集器
           </Button>
           <Button size="sm" variant="ghost" onClick={() => {
-            setShowUsb(true)
-            void usb.refreshPorts().catch(() => {})
+            setShowDevice(true)
+            void device.refreshPorts().catch(() => {})
           }}>
-            <Usb size={15} />{usb.connection?.phase === 'connected' ? 'USB 已连接' : 'USB 设备'}
+            {device.connection?.transport === 'ble' ? <Bluetooth size={15} />
+              : device.connection?.transport === 'wifi' ? <Wifi size={15} /> : <Usb size={15} />}
+            {device.connection?.phase === 'connected'
+              ? device.connection.transport === 'ble' ? '蓝牙已连接'
+                : device.connection.transport === 'wifi' ? 'Wi-Fi 已连接' : 'USB 已连接'
+              : '设备连接'}
           </Button>
           <AppThemeButton />
           <Button size="sm" variant="ghost" onClick={() => setShowSettings('device')}>
@@ -383,7 +388,7 @@ export function Editor() {
                   selected={selectedId} dragging={dragPreview?.item.id} playback={playback} target={target}
                   onSelect={select} onRemove={removeCard} onCardPointerDown={beginDrag} onCardKeyDown={editWithKeys} />
               </div>
-              <DeviceScreenControls usb={usb} />
+              <DeviceScreenControls device={device} />
             </div>
             <section className="preview-settings" aria-labelledby="preview-settings-title">
               <div className="preview-settings-header">
@@ -424,7 +429,7 @@ export function Editor() {
       {showSettings === 'device' && <AppSettings onDismiss={() => setShowSettings(null)}
         interval={pushInterval} onIntervalChange={setPushInterval} />}
       {showSettings === 'codex' && <CodexSettings status={codexStatus} error={sourceError} onDismiss={() => setShowSettings(null)} />}
-      {showUsb && <UsbSettings usb={usb} interval={pushInterval} onDismiss={() => setShowUsb(false)} />}
+      {showDevice && <DisplayConnectionDialog device={device} interval={pushInterval} onDismiss={() => setShowDevice(false)} />}
     </main>
   )
 }
