@@ -1,40 +1,223 @@
 {
   "moduleId": "system",
-  "name": "系统状态",
+  "name": "系统",
   "sdkApiVersion": 2,
   "entry": "index.mjs",
-  "schedule": { "refreshSeconds": 5, "enabled": true },
+  "schedule": {
+    "refreshSeconds": 5,
+    "enabled": true
+  },
   "permissions": {
-    "system": { "kind": "system", "label": "本机系统指标" }
+    "system": {
+      "kind": "system",
+      "label": "本机系统指标"
+    }
   },
   "outputs": {
-    "cpuUsage": { "valueType": "number", "unit": "%" },
-    "memoryUsage": { "valueType": "progress", "unit": "%" },
-    "uptime": { "valueType": "number", "unit": "min" }
+    "cpuUsage": {
+      "valueType": "number",
+      "unit": "%"
+    },
+    "memoryUsage": {
+      "valueType": "progress",
+      "unit": "%",
+      "detailKeys": [
+        "used",
+        "total"
+      ]
+    },
+    "systemDisk": {
+      "valueType": "progress",
+      "unit": "%"
+    },
+    "downloadRate": {
+      "valueType": "number",
+      "unit": "B/s"
+    },
+    "uploadRate": {
+      "valueType": "number",
+      "unit": "B/s"
+    },
+    "uptime": {
+      "valueType": "number",
+      "unit": "min"
+    }
   },
   "widgets": {
     "cpu-usage-history": {
-      "outputKey": "cpuUsage", "kind": "chart", "label": "CPU占用",
-      "supportedSpans": [{ "w": 1, "h": 1 }],
-      "chart": { "series": "bar", "rangeSeconds": 3600, "sampleCount": 12, "min": 0, "max": 100 }
+      "outputKey": "cpuUsage",
+      "kind": "chart",
+      "label": "CPU",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        }
+      ],
+      "chart": {
+        "series": "bar",
+        "rangeSeconds": 3600,
+        "sampleCount": 12,
+        "min": 0,
+        "max": 100
+      }
     },
     "cpu-trend": {
-      "outputKey": "cpuUsage", "kind": "trend", "label": "CPU 趋势",
-      "supportedSpans": [{ "w": 1, "h": 1 }],
-      "trend": { "comparisonSeconds": 300, "deltaUnit": "pp" }
+      "outputKey": "cpuUsage",
+      "kind": "trend",
+      "label": "CPU趋势",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        }
+      ],
+      "trend": {
+        "comparisonSeconds": 300,
+        "deltaUnit": "pp"
+      }
     },
     "cpu-range": {
-      "outputKey": "cpuUsage", "kind": "range", "label": "CPU 区间",
-      "supportedSpans": [{ "w": 1, "h": 1 }],
-      "range": { "mode": "fixed", "min": 0, "max": 100 }
+      "outputKey": "cpuUsage",
+      "kind": "range",
+      "label": "CPU区间",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        }
+      ],
+      "range": {
+        "mode": "fixed",
+        "min": 0,
+        "max": 100
+      }
     },
     "memory": {
-      "outputKey": "memoryUsage", "kind": "progress", "label": "内存占用", "shortLabel": "内存",
-      "supportedSpans": [{ "w": 1, "h": 1 }, { "w": 2, "h": 1 }, { "w": 2, "h": 2 }, { "w": 4, "h": 1 }]
+      "outputKey": "memoryUsage",
+      "kind": "progress",
+      "label": "内存",
+      "shortLabel": "内存",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 2
+        },
+        {
+          "w": 4,
+          "h": 1
+        }
+      ],
+      "detailFields": [
+        {
+          "key": "used",
+          "label": "已用"
+        },
+        {
+          "key": "total",
+          "label": "总量"
+        }
+      ]
     },
     "uptime": {
-      "outputKey": "uptime", "kind": "metric", "label": "开机时长",
-      "supportedSpans": [{ "w": 1, "h": 1 }, { "w": 2, "h": 1 }, { "w": 2, "h": 2 }, { "w": 4, "h": 1 }]
+      "outputKey": "uptime",
+      "kind": "metric",
+      "label": "时长",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 2
+        },
+        {
+          "w": 4,
+          "h": 1
+        }
+      ]
+    },
+    "system-disk": {
+      "outputKey": "systemDisk",
+      "kind": "progress",
+      "label": "系统盘",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 2
+        },
+        {
+          "w": 4,
+          "h": 1
+        }
+      ]
+    },
+    "network-download": {
+      "outputKey": "downloadRate",
+      "kind": "metric",
+      "label": "下载",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 2
+        },
+        {
+          "w": 4,
+          "h": 1
+        }
+      ]
+    },
+    "network-upload": {
+      "outputKey": "uploadRate",
+      "kind": "metric",
+      "label": "上传",
+      "supportedSpans": [
+        {
+          "w": 1,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 1
+        },
+        {
+          "w": 2,
+          "h": 2
+        },
+        {
+          "w": 4,
+          "h": 1
+        }
+      ]
     }
   }
 }

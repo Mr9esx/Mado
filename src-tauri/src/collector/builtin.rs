@@ -61,7 +61,7 @@ pub fn projects() -> &'static [Project] {
                     include_str!("../../../shared/collectors/system/index.mjs"),
                 )],
                 json!({ "calls": [{ "operation": "system", "alias": "system", "params": {},
-                "result": { "cpuPercent": 68, "memoryPercent": 42, "uptimeSeconds": 14400 } }] }),
+                "result": { "cpuUsagePercent": 68, "memoryUsedBytes": 8_589_934_592_u64, "memoryTotalBytes": 17_179_869_184_u64, "memoryAvailableBytes": 8_589_934_592_u64, "systemDiskUsedPercent": 43.2, "networkReceivedBytes": 1000, "networkTransmittedBytes": 500, "uptimeSeconds": 14400 } }] }),
             ),
         ]
     })
@@ -90,6 +90,36 @@ mod binding_tests {
         let project = super::get("codex").unwrap();
         assert!(project.manifest.definition.suggested_bindings.contains_key("appServer"));
         assert!(project.manifest.definition.suggested_bindings.contains_key("logs"));
+    }
+
+    #[test]
+    fn system_module_exposes_additional_short_title_widgets_without_changing_legacy_ids() {
+        let project = super::get("system").unwrap();
+        assert_eq!(project.manifest.definition.name, "系统");
+        let widgets = &project.manifest.definition.widgets;
+        for id in [
+            "cpu-usage-history",
+            "cpu-trend",
+            "cpu-range",
+            "memory",
+            "uptime",
+        ] {
+            assert!(widgets.contains_key(id), "missing compatible widget id {id}");
+        }
+        for id in ["system-disk", "network-download", "network-upload"] {
+            assert!(widgets.contains_key(id), "missing new system widget {id}");
+        }
+        assert!(widgets.values().all(|widget| {
+            widget
+                .label
+                .chars()
+                .filter(|character| ('\u{4e00}'..='\u{9fff}').contains(character))
+                .count()
+                <= 4
+        }));
+        assert!(project.manifest.definition.outputs.contains_key("systemDisk"));
+        assert!(project.manifest.definition.outputs.contains_key("downloadRate"));
+        assert!(project.manifest.definition.outputs.contains_key("uploadRate"));
     }
 
     #[test]

@@ -778,9 +778,81 @@ fn find_files(root: PathBuf, options: FindFiles) -> Result<Value, String> {
         .collect::<Vec<_>>()))
 }
 
+fn project_system_snapshot(
+    cpu_usage_percent: f64,
+    memory_used_bytes: u64,
+    memory_total_bytes: u64,
+    memory_available_bytes: u64,
+    system_disk_used_percent: Option<f64>,
+    network_received: &[u64],
+    network_transmitted: &[u64],
+    uptime_seconds: u64,
+) -> Value {
+    let sum = |values: &[u64]| values.iter().copied().fold(0_u64, u64::saturating_add);
+    let memory_percent = (memory_total_bytes > 0)
+        .then(|| (1000.0 * memory_used_bytes as f64 / memory_total_bytes as f64).round() / 10.0);
+    json!({
+        "cpuUsagePercent": cpu_usage_percent,
+        "memoryUsedBytes": memory_used_bytes,
+        "memoryTotalBytes": memory_total_bytes,
+        "memoryAvailableBytes": memory_available_bytes,
+        "systemDiskUsedPercent": system_disk_used_percent,
+        "networkReceivedBytes": sum(network_received),
+        "networkTransmittedBytes": sum(network_transmitted),
+        "cpuPercent": (cpu_usage_percent * 10.0).round() / 10.0,
+        "memoryPercent": memory_percent,
+        "uptimeSeconds": uptime_seconds,
+    })
+}
+
+fn is_loopback_interface(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    name == "lo" || name == "lo0" || name.contains("loopback")
+}
+
+fn system_mount_point() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("SystemDrive")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/")
+    }
+}
+
+fn same_mount(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        left.to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .eq_ignore_ascii_case(right.to_string_lossy().trim_end_matches(['\\', '/']))
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
+fn system_disk_used_percent(disks: &sysinfo::Disks, mount_point: &Path) -> Option<f64> {
+    let disk = disks
+        .list()
+        .iter()
+        .find(|disk| same_mount(disk.mount_point(), mount_point))?;
+    let total = disk.total_space();
+    (total > 0).then(|| {
+        let used = total.saturating_sub(disk.available_space());
+        (1000.0 * used as f64 / total as f64).round() / 10.0
+    })
+}
+
 fn system_readings() -> Value {
     struct Sampler {
         metrics: sysinfo::System,
+        networks: sysinfo::Networks,
+        disks: sysinfo::Disks,
         refreshed: Instant,
     }
     static SAMPLER: OnceLock<Mutex<Sampler>> = OnceLock::new();
@@ -792,6 +864,8 @@ fn system_readings() -> Value {
         metrics.refresh_memory();
         Mutex::new(Sampler {
             metrics,
+            networks: sysinfo::Networks::new_with_refreshed_list(),
+            disks: sysinfo::Disks::new_with_refreshed_list(),
             refreshed: Instant::now(),
         })
     });
@@ -801,20 +875,33 @@ fn system_readings() -> Value {
     if sampler.refreshed.elapsed() >= sysinfo::MINIMUM_CPU_UPDATE_INTERVAL {
         sampler.metrics.refresh_cpu_usage();
         sampler.metrics.refresh_memory();
+        sampler.networks.refresh(true);
+        sampler.disks.refresh(true);
         sampler.refreshed = Instant::now();
     }
     let metrics = &sampler.metrics;
-    let total = metrics.total_memory();
-    json!({
-        "cpuUsagePercent": f64::from(metrics.global_cpu_usage()),
-        "memoryUsedBytes": metrics.used_memory(),
-        "memoryTotalBytes": total,
-        "cpuPercent": (metrics.global_cpu_usage() * 10.0).round() / 10.0,
-        "memoryPercent": (total != 0).then(|| {
-            (1000.0 * metrics.used_memory() as f64 / total as f64).round() / 10.0
-        }),
-        "uptimeSeconds": sysinfo::System::uptime(),
-    })
+    let received: Vec<u64> = sampler
+        .networks
+        .iter()
+        .filter(|(name, _)| !is_loopback_interface(name))
+        .map(|(_, network)| network.total_received())
+        .collect();
+    let transmitted: Vec<u64> = sampler
+        .networks
+        .iter()
+        .filter(|(name, _)| !is_loopback_interface(name))
+        .map(|(_, network)| network.total_transmitted())
+        .collect();
+    project_system_snapshot(
+        f64::from(metrics.global_cpu_usage()),
+        metrics.used_memory(),
+        metrics.total_memory(),
+        metrics.available_memory(),
+        system_disk_used_percent(&sampler.disks, &system_mount_point()),
+        &received,
+        &transmitted,
+        sysinfo::System::uptime(),
+    )
 }
 
 #[cfg(test)]
@@ -996,5 +1083,42 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"value":73}}'"#;
             .call(call("rpc", json!({ "method": "reading" })))
             .unwrap();
         assert_eq!(result["value"], 73);
+    }
+
+    #[test]
+    fn system_network_sampler_filters_loopback_interface_names() {
+        assert!(is_loopback_interface("lo"));
+        assert!(is_loopback_interface("lo0"));
+        assert!(is_loopback_interface("Loopback Pseudo-Interface 1"));
+        assert!(is_loopback_interface("Software Loopback Interface 1"));
+        assert!(!is_loopback_interface("en0"));
+        assert!(!is_loopback_interface("eth0"));
+    }
+
+    #[test]
+    fn system_snapshot_projects_memory_disk_and_saturating_network_counters() {
+        let snapshot = project_system_snapshot(
+            42.56,
+            7 * 1024_u64.pow(3),
+            16 * 1024_u64.pow(3),
+            9 * 1024_u64.pow(3),
+            Some(73.25),
+            &[u64::MAX, 50],
+            &[100, 200],
+            7200,
+        );
+        assert_eq!(snapshot["cpuUsagePercent"], 42.56);
+        assert_eq!(snapshot["memoryUsedBytes"], 7 * 1024_u64.pow(3));
+        assert_eq!(snapshot["memoryAvailableBytes"], 9 * 1024_u64.pow(3));
+        assert_eq!(snapshot["systemDiskUsedPercent"], 73.25);
+        assert_eq!(snapshot["networkReceivedBytes"], u64::MAX);
+        assert_eq!(snapshot["networkTransmittedBytes"], 300);
+        assert_eq!(snapshot["uptimeSeconds"], 7200);
+    }
+
+    #[test]
+    fn system_disk_projection_is_null_when_system_volume_capacity_is_unknown() {
+        let snapshot = project_system_snapshot(0.0, 0, 0, 0, None, &[], &[], 0);
+        assert!(snapshot["systemDiskUsedPercent"].is_null());
     }
 }
