@@ -1,8 +1,8 @@
 use super::{
     builtin, io,
     model::{
-        path_valid, BindingHint, History, Manifest, Permission, Project, Setting, MAX_FILES,
-        MAX_PROJECT,
+        path_valid, BindingHint, Definition, History, Manifest, Permission, Project, Setting,
+        MAX_FILES, MAX_PROJECT,
     },
     now, runner, vault::KeyStore,
 };
@@ -201,6 +201,22 @@ struct Module {
     draft: Draft,
     released: Option<Release>,
     previous: Option<Release>,
+}
+
+impl Module {
+    fn validate_variable_defaults(&self) -> Result<(), String> {
+        if let Ok(definition) = serde_json::from_str::<Definition>(&self.draft.definition) {
+            definition.validate_variable_defaults()?;
+        }
+        for release in self.released.iter().chain(&self.previous) {
+            release
+                .project
+                .manifest
+                .definition
+                .validate_variable_defaults()?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -424,6 +440,9 @@ impl Workspace {
         }
         let mut stored = next.clone();
         stored.modules.retain(|id, _| builtin::get(id).is_none());
+        for module in stored.modules.values() {
+            module.validate_variable_defaults()?;
+        }
         let mut has_variables = false;
         let stored = stored.map_settings(|variable, value| {
             if !variable {
@@ -1969,6 +1988,75 @@ mod tests {
             .result
             .unwrap();
         assert_eq!(result.outputs["reading"]["value"], 12);
+    }
+
+    #[test]
+    fn variable_defaults_cannot_be_written_to_the_catalog() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("collectors.json");
+        let mut workspace = Workspace::load(path.clone()).unwrap();
+        let (mut catalog, id) = variable_catalog();
+        let instance = catalog.instances.get_mut(&id).unwrap();
+        instance.settings.retain(|key, _| key == "source");
+        let module_id = instance.module_id.clone();
+        let module = catalog.modules.get_mut(&module_id).unwrap();
+        let release = module.released.as_mut().unwrap();
+        release
+            .project
+            .manifest
+            .definition
+            .settings
+            .get_mut("legacy_option")
+            .unwrap()
+            .default = "legacy-default".into();
+        module.draft = Draft::from_project(&release.project);
+        workspace.save(catalog.clone()).unwrap();
+
+        let secret_default = "private-default-token";
+        let module = &catalog.modules[&module_id];
+        let mut invalid_release = module.released.clone().unwrap();
+        invalid_release
+            .project
+            .manifest
+            .definition
+            .settings
+            .get_mut("API_TOKEN")
+            .unwrap()
+            .default = secret_default.into();
+        for invalid_module in [
+            Module {
+                draft: Draft::from_project(&invalid_release.project),
+                ..module.clone()
+            },
+            Module {
+                released: Some(invalid_release.clone()),
+                ..module.clone()
+            },
+            Module {
+                previous: Some(invalid_release),
+                ..module.clone()
+            },
+        ] {
+            let mut next = catalog.clone();
+            next.modules.insert(module_id.clone(), invalid_module);
+            let error = workspace.save(next).unwrap_err();
+            assert!(error.contains("默认值"));
+            assert!(!error.contains(secret_default));
+        }
+        assert!(!fs::read_to_string(&path).unwrap().contains(secret_default));
+        let restarted = Workspace::load(path).unwrap();
+        let project = &restarted.catalog.modules[&module_id]
+            .released
+            .as_ref()
+            .unwrap()
+            .project;
+        let settings = io::settings(
+            &project.manifest.definition,
+            &restarted.catalog.instances[&id].settings,
+        )
+        .unwrap();
+        assert_eq!(settings["API_TOKEN"], "");
+        assert_eq!(settings["legacy_option"], "legacy-default");
     }
 
     #[test]

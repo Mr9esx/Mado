@@ -53,6 +53,19 @@ pub struct Definition {
     pub widgets: BTreeMap<String, WidgetSpec>,
 }
 
+impl Definition {
+    pub(super) fn validate_variable_defaults(&self) -> Result<(), String> {
+        if self
+            .settings
+            .values()
+            .any(|setting| setting.is_variable() && !setting.default.is_empty())
+        {
+            return Err("变量不能声明非空默认值，请在采集器实例中配置。".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum BindingHint {
@@ -347,6 +360,7 @@ impl Project {
             1 | 2 => return Err("SDK v1 使用 inputs，SDK v2 使用 settings 和 permissions。".into()),
             _ => return Err("此模块的 SDK 版本不受支持。".into()),
         }
+        definition.validate_variable_defaults()?;
         if definition
             .schedule
             .as_ref()
@@ -826,5 +840,20 @@ mod tests {
             serde_json::to_value(&project).unwrap()["manifest"]["settings"]["legacy_option"],
             legacy
         );
+    }
+
+    #[test]
+    fn variable_defaults_are_rejected_without_echoing_the_value() {
+        let project = project_with_settings(json!({
+            "API_TOKEN": { "label": "令牌", "secret": true, "default": "private-default-token" }
+        }));
+        let error = project.validate(false).unwrap_err();
+        assert!(error.contains("默认值"));
+        assert!(!error.contains("private-default-token"));
+
+        let project = project_with_settings(json!({
+            "PUBLIC_VALUE": { "label": "公开变量", "required": false, "default": "public-default" }
+        }));
+        assert!(project.validate(false).is_err());
     }
 }
